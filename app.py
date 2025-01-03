@@ -28,7 +28,7 @@ def process_buffer(buffer, filter_position):
     
     try:
         # La clé est appliquée dans le champ pdftools
-        key = b'NORBJ\x00'  # Ajout d'un octet nul pour terminer la chaîne
+        key = b'NORBJ'  # Sans octet nul
         
         # On cherche SVID(pdftools)
         content = buffer[filter_position:filter_position+200].decode('latin-1', errors='ignore')
@@ -49,7 +49,8 @@ def process_buffer(buffer, filter_position):
                 st.write("Valeur actuelle:", content[value_start+1:value_end])
                 
                 # On remplace tout le contenu entre parenthèses
-                replacement = key + b' ' * (abs_value_end - abs_value_start - len(key))
+                field_length = abs_value_end - abs_value_start
+                replacement = key + b'     '[:field_length - len(key)]  # Remplir avec des espaces ASCII
                 
                 st.write("Contenu avant modification:", 
                     processed_buffer[abs_value_start:abs_value_end].hex())
