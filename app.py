@@ -8,7 +8,6 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 def dump_buffer(buffer, start, length, prefix=""):
-    """Affiche le contenu d'un buffer en hex et ascii."""
     hex_dump = ' '.join([f"{b:02x}" for b in buffer[start:start+length]])
     ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in buffer[start:start+length]])
     st.write(f"{prefix} HEX: {hex_dump}")
@@ -18,13 +17,11 @@ def find_all_occurrences(text, pattern):
     pos = 0
     while True:
         pos = text.find(pattern, pos)
-        if pos == -1:
-            break
+        if pos == -1: break
         yield pos
         pos += 1
 
 def find_parameter(context, param, abs_pos):
-    """Trouve un paramètre avec logging détaillé."""
     st.write(f"\n=== Recherche paramètre {param} depuis position {abs_pos} ===")
     try:
         param_forms = [
@@ -40,8 +37,6 @@ def find_parameter(context, param, abs_pos):
             if start != -1:
                 st.write(f"Trouvé {pattern} à position relative {start} (absolue: {abs_pos + start})")
                 pos = start + len(pattern)
-                
-                # Dump du contexte autour
                 relative_context = context[max(0, start-10):min(len(context), start+50)]
                 st.write(f"Contexte: ...{relative_context}...")
                 
@@ -73,7 +68,6 @@ def find_parameter(context, param, abs_pos):
                             'end': abs_pos + pos + len(value),
                             'type': form['type']
                         }
-        st.write(f"❌ Paramètre {param} non trouvé")
         return None
     
     except Exception as e:
@@ -81,142 +75,124 @@ def find_parameter(context, param, abs_pos):
         return None
 
 def process_drm(buffer, positions):
-    """Déprotection avec logging détaillé du DRM FileOpen."""
     st.write("\n=== DÉBUT TRAITEMENT DRM ===")
     processed_buffer = bytearray(buffer)
     
     for idx, pos in enumerate(positions):
         st.write(f"\n== Traitement occurrence {idx+1}/{len(positions)} à position {pos} ==")
-        
-        # Analyse d'un large contexte
-        context_size = 1000
         context_start = max(0, pos - 50)
-        context_end = min(len(buffer), pos + context_size)
-        context = buffer[context_start:context_end].decode('latin-1', errors='ignore')
+        context = buffer[context_start:context_start+1000].decode('latin-1', errors='ignore')
         
-        st.write("\nAnalyse préliminaire:")
-        dump_buffer(buffer, context_start, min(100, len(context)), "Premier bloc:")
+        st.write("\nAnalyse structure PDF:")
+        dump_buffer(buffer, context_start, min(200, len(context)), "Structure:")
         
-        # Identifier structure FileOpen
-        params = {}
-        for param in ['Filter', 'V', 'Length', 'VEID', 'BUILD', 'SVID', 'DUID']:
-            param_info = find_parameter(context, param, context_start)
-            if param_info:
-                params[param] = param_info
-                st.write(f"\nTrouvé {param}:")
-                st.write(f"  Valeur: {param_info['value']}")
-                st.write(f"  Position: {param_info['start']}-{param_info['end']}")
-                
-                # Dump avant modification
-                dump_buffer(buffer, param_info['start'], param_info['end'] - param_info['start'], 
-                          f"Avant modification {param}:")
-        
-        # Modifications
-        st.write("\n=== Application des modifications ===")
-        
-        # 1. SVID
-        if 'SVID' in params:
-            svid = params['SVID']
-            replacement = b'NORBJ' + b' ' * (svid['end'] - svid['start'] - 5)
-            st.write(f"\nModification SVID:")
-            st.write(f"Position: {svid['start']}-{svid['end']}")
-            dump_buffer(processed_buffer, svid['start'], len(replacement), "Avant:")
+        # 1. Replace FOPN_foweb filter
+        filter_pos = context.find('/Filter/FOPN_foweb')
+        if filter_pos != -1:
+            abs_filter_pos = context_start + filter_pos
+            st.write(f"\nRemplacement filtre à position {abs_filter_pos}:")
+            dump_buffer(processed_buffer, abs_filter_pos, 18, "Avant:")
+            replacement = b'/Filter/FlateDecode'
             for i, byte in enumerate(replacement):
-                processed_buffer[svid['start'] + i] = byte
-            dump_buffer(processed_buffer, svid['start'], len(replacement), "Après:")
+                processed_buffer[abs_filter_pos + i] = byte
+            dump_buffer(processed_buffer, abs_filter_pos, 18, "Après:")
         
-        # 2. Paramètre V
-        if 'V' in params:
-            v_param = params['V']
-            st.write(f"\nModification V:")
-            st.write(f"Position: {v_param['start']}")
-            dump_buffer(processed_buffer, v_param['start'], 1, "Avant:")
-            processed_buffer[v_param['start']] = ord('0')
-            dump_buffer(processed_buffer, v_param['start'], 1, "Après:")
+        # 2. Set V parameter to 0
+        v_pos = context.find('/V 1')
+        if v_pos != -1:
+            abs_v_pos = context_start + v_pos + 3
+            st.write(f"\nModification V à position {abs_v_pos}:")
+            dump_buffer(processed_buffer, abs_v_pos, 1, "Avant:")
+            processed_buffer[abs_v_pos] = ord('0')
+            dump_buffer(processed_buffer, abs_v_pos, 1, "Après:")
         
-        # 3. Length et contenu
-        if 'Length' in params:
-            length_param = params['Length']
-            length = int(length_param['value'])
-            st.write(f"\nTraitement Length ({length} bytes):")
-            # Chercher endstream
-            endstream_pos = context.find('endstream', length_param['end'] - context_start)
-            if endstream_pos != -1:
-                abs_endstream = context_start + endstream_pos
-                st.write(f"Position endstream: {abs_endstream}")
-                # Effacer contenu
-                st.write(f"Effacement contenu de {length_param['end']} à {abs_endstream}")
-                dump_buffer(processed_buffer, length_param['end'], 
-                          min(50, abs_endstream - length_param['end']), "Avant:")
-                for i in range(length_param['end'], abs_endstream):
-                    processed_buffer[i] = 0
-                dump_buffer(processed_buffer, length_param['end'], 
-                          min(50, abs_endstream - length_param['end']), "Après:")
+        # 3. Handle encrypted content
+        info_pos = context.find('/INFO(')
+        if info_pos != -1:
+            info_start = context_start + info_pos + 6
+            info_len = 40  # Fixed length from Length parameter
+            st.write(f"\nEffacement contenu chiffré {info_start}-{info_start+info_len}:")
+            dump_buffer(processed_buffer, info_start, info_len, "Avant:")
+            processed_buffer[info_start:info_start+info_len] = b'\x00' * info_len
+            dump_buffer(processed_buffer, info_start, info_len, "Après:")
         
-        st.write("\n=== Fin du traitement de cette occurrence ===\n")
+        # 4. Handle stream markers
+        endstream_pos = context.find('endstream', info_pos if info_pos != -1 else 0)
+        if endstream_pos != -1:
+            abs_end = context_start + endstream_pos
+            st.write(f"Marqueur endstream trouvé: {abs_end}")
+            
+            # Look for stream begin
+            stream_pos = context.rfind('stream', 0, endstream_pos)
+            if stream_pos != -1:
+                abs_stream = context_start + stream_pos
+                st.write(f"Marqueur stream trouvé: {abs_stream}")
+                # Clear content between markers
+                st.write(f"Nettoyage contenu entre markers: {abs_stream+7}-{abs_end}")
+                processed_buffer[abs_stream+7:abs_end] = b'\x00' * (abs_end - (abs_stream+7))
     
     st.write("\n=== FIN TRAITEMENT DRM ===")
     return bytes(processed_buffer)
 
+def extract_text_from_pdf(buffer):
+    try:
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(buffer))
+        text = []
+        for i, page in enumerate(pdf_reader.pages):
+            text.append(f"=== Page {i+1} ===\n{page.extract_text()}")
+        return '\n\n'.join(text)
+    except Exception as e:
+        st.error(f"Erreur extraction: {str(e)}")
+        return None
+
 def analyze_pdf(file_bytes):
-    """Analyse et déprotège le PDF avec logs détaillés."""
     try:
         st.write("=== DÉBUT ANALYSE PDF ===")
         st.write(f"Taille du fichier: {len(file_bytes)} bytes")
         st.write(f"Signature: {file_bytes[:8].hex()}")
         
         if file_bytes[:4] != b'%PDF':
-            raise ValueError("Format de fichier non valide - Ce n'est pas un PDF")
-        st.write("✓ En-tête PDF valide")
+            raise ValueError("Format invalide - Pas un PDF")
         
         content_latin = file_bytes.decode('latin-1', errors='ignore')
         matches = list(find_all_occurrences(content_latin, '/FOPN_foweb'))
-        st.write(f"\nRecherche protection FileOpen:")
-        st.write(f"Nombre d'occurrences: {len(matches)}")
-        
         if matches:
-            st.write("\n=== DÉTAIL DES OCCURRENCES ===")
+            st.write("\n=== OCCURRENCES PROTECTION FILEOPEN ===")
             for i, pos in enumerate(matches):
                 st.write(f"\n== Occurrence {i+1}/{len(matches)} ==")
                 st.write(f"Position: {pos}")
                 context_start = max(0, pos - 50)
                 context = content_latin[context_start:pos + 200]
-                st.write("Contexte:", context)
+                st.write(f"Contexte: {context}")
                 dump_buffer(file_bytes, context_start, min(200, len(context)), "Premier bloc:")
-        
-        # Traitement DRM
-        has_fileopen = len(matches) > 0
-        if has_fileopen:
+            
             st.write("\n=== DÉPROTECTION DRM ===")
             processed_buffer = process_drm(file_bytes, matches)
+            extracted_text = extract_text_from_pdf(processed_buffer)
+            
+            drm_info = {
+                'has_fileopen': True,
+                'type': 'FileOpen DRM',
+                'filter': 'FOPN_foweb',
+                'key_length': '5 bytes',
+                'file_size': len(file_bytes),
+                'size_kb': round(len(file_bytes) / 1024)
+            }
         else:
+            st.write("Pas de protection FileOpen détectée")
             processed_buffer = file_bytes
+            extracted_text = extract_text_from_pdf(file_bytes)
             
-        st.write("\n=== EXTRACTION TEXTE ===")
-        try:
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(processed_buffer))
-            text = ""
-            st.write(f"Nombre de pages: {len(pdf_reader.pages)}")
-            for i, page in enumerate(pdf_reader.pages):
-                st.write(f"Extraction page {i+1}...")
-                text += page.extract_text() + "\n"
-            st.write("✓ Extraction réussie")
-        except Exception as e:
-            st.error(f"❌ Erreur extraction: {str(e)}")
-            text = None
-            
-        # Infos finales
-        drm_info = {
-            'has_fileopen': has_fileopen,
-            'type': 'FileOpen DRM' if has_fileopen else 'Pas de DRM FileOpen détecté',
-            'filter': 'FOPN_foweb' if has_fileopen else 'N/A',
-            'key_length': '5 bytes' if has_fileopen else 'N/A',
-            'file_size': len(file_bytes),
-            'size_kb': round(len(file_bytes) / 1024)
-        }
+            drm_info = {
+                'has_fileopen': False,
+                'type': 'Pas de DRM FileOpen',
+                'filter': 'N/A',
+                'key_length': 'N/A',
+                'file_size': len(file_bytes),
+                'size_kb': round(len(file_bytes) / 1024)
+            }
         
-        st.write("\n=== FIN ANALYSE PDF ===")
-        return drm_info, processed_buffer, text
+        return drm_info, processed_buffer, extracted_text
         
     except Exception as e:
         st.error(f"Erreur analyse PDF: {str(e)}")
