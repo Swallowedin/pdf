@@ -1,51 +1,4 @@
-def process_drm(buffer, positions):
-    processed_buffer = bytearray(buffer)
-    
-    for pos in positions:
-        # Trouver l'objet PDF
-        pre_context = buffer[max(0,pos-1000):pos].decode('latin-1', errors='ignore')
-        obj_marker = pre_context.rfind(' 0 obj')
-        if obj_marker != -1:
-            # ID de l'objet
-            obj_num_start = pre_context.rfind('\n', 0, obj_marker)
-            if obj_num_start != -1:
-                obj_id = pre_context[obj_num_start:obj_marker].strip()
-                st.write(f"Traitement de l'objet: {obj_id}")
-            
-            # Début de l'objet
-            abs_obj_start = max(0,pos-1000) + obj_marker
-            st.write(f"Début obj: {abs_obj_start}")
-            dump_buffer(buffer, abs_obj_start, 50, "Header objet:")
-                
-        # Chercher séquence stream/endstream
-        context = buffer[pos-100:pos+1000].decode('latin-1', errors='ignore')
-        stream_pos = context.find('stream\n')  # Le \n est important
-        endstream_pos = context.find('endstream')
-        
-        if stream_pos != -1 and endstream_pos != -1:
-            abs_stream_start = (pos-100) + stream_pos + 7  # +7 pour skip 'stream\n'
-            abs_stream_end = (pos-100) + endstream_pos
-            st.write(f"Stream: {abs_stream_start}-{abs_stream_end}")
-            
-            # Corriger l'en-tête avant stream
-            filter_pos = context.find('/Filter/FOPN_foweb')
-            if filter_pos != -1:
-                abs_filter_pos = (pos-100) + filter_pos
-                st.write(f"Remplacement filtre: {abs_filter_pos}")
-                processed_buffer[abs_filter_pos:abs_filter_pos+18] = b'/Filter/FlateDecode'
-                
-            # Mettre V à 0    
-            v_pos = context.find('/V 1')
-            if v_pos != -1:
-                abs_v_pos = (pos-100) + v_pos + 3
-                st.write(f"Modification V: {abs_v_pos}")
-                processed_buffer[abs_v_pos] = ord('0')
-            
-            # Effacer contenu chiffré entre stream et endstream
-            st.write(f"Effacement contenu: {abs_stream_start}-{abs_stream_end}")
-            processed_buffer[abs_stream_start:abs_stream_end] = b'\x00' * (abs_stream_end - abs_stream_start)
-    
-    return bytes(processed_buffer)import streamlit as st
+import streamlit as st
 import io
 import logging
 from pathlib import Path
@@ -68,108 +21,50 @@ def find_all_occurrences(text, pattern):
         yield pos
         pos += 1
 
-def find_parameter(context, param, abs_pos):
-    st.write(f"\n=== Recherche paramètre {param} depuis position {abs_pos} ===")
-    try:
-        param_forms = [
-            {'pattern': f'/{param} ', 'type': 'numérique'},
-            {'pattern': f'/{param}(', 'type': 'parenthèses'},
-            {'pattern': f'/{param}/', 'type': 'chemin'},
-            {'pattern': f'/{param}<<', 'type': 'dictionnaire'}
-        ]
-        
-        for form in param_forms:
-            pattern = form['pattern']
-            start = context.find(pattern)
-            if start != -1:
-                st.write(f"Trouvé {pattern} à position relative {start} (absolue: {abs_pos + start})")
-                pos = start + len(pattern)
-                relative_context = context[max(0, start-10):min(len(context), start+50)]
-                st.write(f"Contexte: ...{relative_context}...")
-                
-                if pattern.endswith('('):
-                    end = context.find(')', pos)
-                    if end != -1:
-                        value = context[pos:end]
-                        st.write(f"→ Valeur ({form['type']}): '{value}'")
-                        st.write(f"→ Position valeur: {abs_pos + pos}-{abs_pos + end}")
-                        return {
-                            'value': value,
-                            'start': abs_pos + pos,
-                            'end': abs_pos + end,
-                            'type': form['type']
-                        }
-                else:
-                    value = ''
-                    for i, char in enumerate(context[pos:pos+20]):
-                        if char in '0123456789.':
-                            value += char
-                        else:
-                            break
-                    if value:
-                        st.write(f"→ Valeur ({form['type']}): '{value}'")
-                        st.write(f"→ Position valeur: {abs_pos + pos}-{abs_pos + pos + len(value)}")
-                        return {
-                            'value': value,
-                            'start': abs_pos + pos,
-                            'end': abs_pos + pos + len(value),
-                            'type': form['type']
-                        }
-        return None
-    
-    except Exception as e:
-        st.error(f"Erreur lors de la recherche du paramètre {param}: {str(e)}")
-        return None
-
 def process_drm(buffer, positions):
     processed_buffer = bytearray(buffer)
     
     for pos in positions:
-        # Remonter pour trouver le début réel du stream
+        # Trouver l'objet PDF
         pre_context = buffer[max(0,pos-1000):pos].decode('latin-1', errors='ignore')
-        stream_start = pre_context.rfind('stream')
-        if stream_start != -1:
-            abs_stream_start = max(0,pos-1000) + stream_start
-            st.write(f"Début stream trouvé: {abs_stream_start}")
-            dump_buffer(buffer, abs_stream_start, 50, "Début stream:")
-            
-        # Trouver l'objet parent
         obj_marker = pre_context.rfind(' 0 obj')
         if obj_marker != -1:
             obj_num_start = pre_context.rfind('\n', 0, obj_marker)
             if obj_num_start != -1:
                 obj_id = pre_context[obj_num_start:obj_marker].strip()
-                st.write(f"Objet parent: {obj_id}")
-                
-        # Traiter le filtre et le contenu
-        context = buffer[pos:pos+1000].decode('latin-1', errors='ignore')
-        
-        # Remplacer FOPN_foweb par FlateDecode
-        filter_pos = context.find('/Filter/FOPN_foweb')
-        if filter_pos != -1:
-            abs_filter_pos = pos + filter_pos 
-            processed_buffer[abs_filter_pos:abs_filter_pos+18] = b'/Filter/FlateDecode'
-        
-        # Mettre V à 0
-        v_pos = context.find('/V ')
-        if v_pos != -1:
-            abs_v_pos = pos + v_pos + 3
-            processed_buffer[abs_v_pos] = ord('0')
+                st.write(f"Traitement de l'objet: {obj_id}")
             
-        # Effacer le contenu chiffré
-        info_pos = context.find('/INFO(')
-        endstream_pos = context.find('endstream', info_pos if info_pos != -1 else 0)
-        if info_pos != -1 and endstream_pos != -1:
-            # Début après /INFO(
-            content_start = pos + info_pos + 6
-            # Fin avant endstream
-            content_end = pos + endstream_pos
-            st.write(f"Effacement {content_start}-{content_end}")
-            processed_buffer[content_start:content_end] = b'\x00' * (content_end - content_start)
+            abs_obj_start = max(0,pos-1000) + obj_marker
+            st.write(f"Début obj: {abs_obj_start}")
+            dump_buffer(buffer, abs_obj_start, 50, "Header objet:")
+                
+        # Chercher séquence stream/endstream
+        context = buffer[pos-100:pos+1000].decode('latin-1', errors='ignore')
+        stream_pos = context.find('stream\n')
+        endstream_pos = context.find('endstream')
         
-    return bytes(processed_buffer)
+        if stream_pos != -1 and endstream_pos != -1:
+            abs_stream_start = (pos-100) + stream_pos + 7
+            abs_stream_end = (pos-100) + endstream_pos
+            st.write(f"Stream: {abs_stream_start}-{abs_stream_end}")
+            
+            # Corriger l'en-tête
+            filter_pos = context.find('/Filter/FOPN_foweb')
+            if filter_pos != -1:
+                abs_filter_pos = (pos-100) + filter_pos
+                st.write(f"Remplacement filtre: {abs_filter_pos}")
+                processed_buffer[abs_filter_pos:abs_filter_pos+18] = b'/Filter/FlateDecode'
+                
+            v_pos = context.find('/V 1')
+            if v_pos != -1:
+                abs_v_pos = (pos-100) + v_pos + 3
+                st.write(f"Modification V: {abs_v_pos}")
+                processed_buffer[abs_v_pos] = ord('0')
+            
+            # Effacer contenu chiffré
+            st.write(f"Effacement contenu: {abs_stream_start}-{abs_stream_end}")
+            processed_buffer[abs_stream_start:abs_stream_end] = b'\x00' * (abs_stream_end - abs_stream_start)
     
-    st.write("\n=== FIN TRAITEMENT DRM ===")
     return bytes(processed_buffer)
 
 def extract_text_from_pdf(buffer):
@@ -194,6 +89,7 @@ def analyze_pdf(file_bytes):
         
         content_latin = file_bytes.decode('latin-1', errors='ignore')
         matches = list(find_all_occurrences(content_latin, '/FOPN_foweb'))
+        
         if matches:
             st.write("\n=== OCCURRENCES PROTECTION FILEOPEN ===")
             for i, pos in enumerate(matches):
