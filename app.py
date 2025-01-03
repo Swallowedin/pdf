@@ -17,15 +17,19 @@ def find_all_occurrences(text, pattern):
 
 def find_parameter(context, param):
     try:
+        st.write(f"Recherche du paramètre {param}")
         param_forms = [f'/{param} ', f'/{param}(', f'/{param}/', f'/{param}<<']
         for form in param_forms:
             start = context.find(form)
             if start != -1:
+                st.write(f"Trouvé {form} à la position {start}")
                 pos = start + len(form)
                 if form.endswith('('):
                     end = context.find(')', pos)
                     if end != -1:
-                        return context[pos:end]
+                        value = context[pos:end]
+                        st.write(f"Valeur trouvée (parenthèses): '{value}'")
+                        return value
                 else:
                     value = ''
                     for char in context[pos:pos+10]:
@@ -78,14 +82,41 @@ def apply_key_to_svid(buffer, filter_pos):
     return processed_buffer
 
 def process_drm(buffer, positions):
+    """Déprotection du DRM FileOpen."""
     processed_buffer = bytearray(buffer)
+    
     for pos in positions:
-        processed_buffer = apply_key_to_svid(processed_buffer, pos)
-        processed_buffer = modify_filter_params(processed_buffer, pos)
+        context = buffer[pos:pos+200].decode('latin-1', errors='ignore')
+        st.write(f"\nOccurrence trouvée à la position {pos}:")
+        st.write("Contexte:", context)
+        
+        # 1. Modification SVID
+        svid_pos = context.find('SVID(')
+        if svid_pos != -1:
+            abs_svid_start = pos + context.find('(', svid_pos) + 1
+            abs_svid_end = pos + context.find(')', svid_pos)
+            st.write(f"Position SVID: {abs_svid_start}-{abs_svid_end}")
+            st.write("Valeur actuelle:", context[svid_pos+5:context.find(')', svid_pos)])
+            replacement = b'NORBJ' + b' ' * (abs_svid_end - abs_svid_start - 5)
+            st.write("Remplacement par:", replacement)
+            for i, byte in enumerate(replacement):
+                processed_buffer[abs_svid_start + i] = byte
+        
+        # 2. Modification paramètre V
+        v_pos = context.find('/V ')
+        if v_pos != -1:
+            abs_v_pos = pos + v_pos + 3
+            st.write(f"Position V: {abs_v_pos}")
+            st.write("Valeur actuelle:", context[v_pos+3:v_pos+4])
+            processed_buffer[abs_v_pos:abs_v_pos+1] = b'0'
+            st.write("Nouvelle valeur: 0")
+    
     return bytes(processed_buffer)
 
 def analyze_pdf(file_bytes):
     """Analyse et déprotège le PDF."""
+    st.write("Taille du fichier:", len(file_bytes), "bytes")
+    st.write("Premiers octets:", file_bytes[:10].hex())
     try:
         if file_bytes[:4] != b'%PDF':
             raise ValueError("Format de fichier non valide - Ce n'est pas un PDF")
