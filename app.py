@@ -10,24 +10,55 @@ logging.basicConfig(level=logging.DEBUG)
 
 def search_fileopen_signature(pdf_bytes):
     """Recherche les signatures FileOpen dans le PDF."""
-    # On cherche dans tout le fichier, pas seulement l'en-tête
-    content = pdf_bytes.hex()
-    signatures = {
-        'foweb': 'FOPN_foweb',
-        'drm': 'FileOpen',
-        'code': 'NORBJ'
+    # Décodage du contenu avec différents encodages pour être sûr
+    content_latin = pdf_bytes.decode('latin-1', errors='ignore')
+    content_utf8 = pdf_bytes.decode('utf-8', errors='ignore')
+    content_hex = pdf_bytes.hex()
+    
+    # Recherche exacte avec contexte
+    foweb_pos_latin = content_latin.find('FOPN_foweb')
+    foweb_pos_utf8 = content_utf8.find('FOPN_foweb')
+    
+    # Affichage du contexte si trouvé
+    if foweb_pos_latin != -1:
+        st.write("Signature FOPN_foweb trouvée (latin-1) à la position:", foweb_pos_latin)
+        context_start = max(0, foweb_pos_latin - 50)
+        context_end = min(len(content_latin), foweb_pos_latin + 50)
+        st.write("Contexte (latin-1):", content_latin[context_start:context_end])
+    
+    if foweb_pos_utf8 != -1 and foweb_pos_utf8 != foweb_pos_latin:
+        st.write("Signature FOPN_foweb trouvée (utf-8) à la position:", foweb_pos_utf8)
+        context_start = max(0, foweb_pos_utf8 - 50)
+        context_end = min(len(content_utf8), foweb_pos_utf8 + 50)
+        st.write("Contexte (utf-8):", content_utf8[context_start:context_end])
+    
+    # Recherche de patterns spécifiques
+    patterns = {
+        'filter': '/FOPN_foweb',
+        'code': 'Code=NORBJ',
+        'code_alt': 'Code=',
+        'drm': 'FileOpen'
     }
     
+    st.write("\nRecherche de patterns spécifiques:")
     results = {}
-    for key, signature in signatures.items():
-        # Recherche en binaire et en texte
-        hex_sig = signature.encode('ascii').hex()
-        results[key] = {
-            'found': hex_sig in content or signature in pdf_bytes.decode('latin-1', errors='ignore'),
-            'signature': signature
-        }
+    for key, pattern in patterns.items():
+        pos_latin = content_latin.find(pattern)
+        pos_utf8 = content_utf8.find(pattern)
+        st.write(f"Pattern '{pattern}':")
+        st.write(f"- Position (latin-1): {pos_latin}")
+        st.write(f"- Position (utf-8): {pos_utf8}")
+        if pos_latin != -1:
+            context_start = max(0, pos_latin - 20)
+            context_end = min(len(content_latin), pos_latin + 20)
+            st.write(f"- Contexte (latin-1): {content_latin[context_start:context_end]}")
     
-    return results
+    # Retourne les résultats pour la compatibilité
+    return {
+        'foweb': {'found': foweb_pos_latin != -1 or foweb_pos_utf8 != -1, 'signature': 'FOPN_foweb'},
+        'drm': {'found': 'FileOpen' in content_latin or 'FileOpen' in content_utf8, 'signature': 'FileOpen'},
+        'code': {'found': 'NORBJ' in content_latin or 'NORBJ' in content_utf8, 'signature': 'NORBJ'}
+    }
 
 def process_buffer(buffer, signatures):
     """Traite le buffer PDF pour retirer la protection FileOpen."""
