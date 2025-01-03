@@ -6,17 +6,29 @@ import PyPDF2
 
 logging.basicConfig(level=logging.DEBUG)
 
-def extract_text_from_pdf(buffer):
-    """Extrait le texte d'un PDF."""
-    try:
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(buffer))
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        return text
-    except Exception as e:
-        st.error(f"Erreur lors de l'extraction du texte: {str(e)}")
-        return None
+def extract_text_from_pdf(buffer, processed_buffer=None):
+    """Extrait le texte d'un PDF, en essayant d'abord le buffer original puis le buffer traité."""
+    def try_extract(buf):
+        try:
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(buf))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+        except Exception as e:
+            st.error(f"Erreur lors de l'extraction du texte: {str(e)}")
+            return None
+            
+    # Essai avec le buffer original
+    text = try_extract(buffer)
+    
+    # Si échec et buffer traité disponible, essai avec celui-ci
+    if text is None and processed_buffer is not None:
+        text = try_extract(processed_buffer)
+        if text is not None:
+            st.success("Extraction réussie après traitement DRM")
+            
+    return text
 
 def find_all_occurrences(text, pattern):
     pos = 0
@@ -111,8 +123,15 @@ def analyze_pdf(file_bytes):
         
         st.write("En-tête PDF valide détectée")
         
+        # Traitement DRM si nécessaire
+        has_fileopen = len(matches) > 0
+        if has_fileopen:
+            processed_buffer = process_drm(file_bytes, matches)
+        else:
+            processed_buffer = file_bytes
+            
         # Extraction du texte
-        extracted_text = extract_text_from_pdf(file_bytes)
+        extracted_text = extract_text_from_pdf(file_bytes, processed_buffer)
         if extracted_text:
             st.write("### Contenu textuel extrait du PDF:")
             st.text_area("Texte extrait", extracted_text, height=200)
