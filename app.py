@@ -75,61 +75,52 @@ def find_parameter(context, param, abs_pos):
         return None
 
 def process_drm(buffer, positions):
-    st.write("\n=== DÉBUT TRAITEMENT DRM ===")
     processed_buffer = bytearray(buffer)
     
-    for idx, pos in enumerate(positions):
-        st.write(f"\n== Traitement occurrence {idx+1}/{len(positions)} à position {pos} ==")
-        context_start = max(0, pos - 50)
-        context = buffer[context_start:context_start+1000].decode('latin-1', errors='ignore')
+    for pos in positions:
+        # Remonter pour trouver le début réel du stream
+        pre_context = buffer[max(0,pos-1000):pos].decode('latin-1', errors='ignore')
+        stream_start = pre_context.rfind('stream')
+        if stream_start != -1:
+            abs_stream_start = max(0,pos-1000) + stream_start
+            st.write(f"Début stream trouvé: {abs_stream_start}")
+            dump_buffer(buffer, abs_stream_start, 50, "Début stream:")
+            
+        # Trouver l'objet parent
+        obj_marker = pre_context.rfind(' 0 obj')
+        if obj_marker != -1:
+            obj_num_start = pre_context.rfind('\n', 0, obj_marker)
+            if obj_num_start != -1:
+                obj_id = pre_context[obj_num_start:obj_marker].strip()
+                st.write(f"Objet parent: {obj_id}")
+                
+        # Traiter le filtre et le contenu
+        context = buffer[pos:pos+1000].decode('latin-1', errors='ignore')
         
-        st.write("\nAnalyse structure PDF:")
-        dump_buffer(buffer, context_start, min(200, len(context)), "Structure:")
-        
-        # 1. Replace FOPN_foweb filter
+        # Remplacer FOPN_foweb par FlateDecode
         filter_pos = context.find('/Filter/FOPN_foweb')
         if filter_pos != -1:
-            abs_filter_pos = context_start + filter_pos
-            st.write(f"\nRemplacement filtre à position {abs_filter_pos}:")
-            dump_buffer(processed_buffer, abs_filter_pos, 18, "Avant:")
-            replacement = b'/Filter/FlateDecode'
-            for i, byte in enumerate(replacement):
-                processed_buffer[abs_filter_pos + i] = byte
-            dump_buffer(processed_buffer, abs_filter_pos, 18, "Après:")
+            abs_filter_pos = pos + filter_pos 
+            processed_buffer[abs_filter_pos:abs_filter_pos+18] = b'/Filter/FlateDecode'
         
-        # 2. Set V parameter to 0
-        v_pos = context.find('/V 1')
+        # Mettre V à 0
+        v_pos = context.find('/V ')
         if v_pos != -1:
-            abs_v_pos = context_start + v_pos + 3
-            st.write(f"\nModification V à position {abs_v_pos}:")
-            dump_buffer(processed_buffer, abs_v_pos, 1, "Avant:")
+            abs_v_pos = pos + v_pos + 3
             processed_buffer[abs_v_pos] = ord('0')
-            dump_buffer(processed_buffer, abs_v_pos, 1, "Après:")
-        
-        # 3. Handle encrypted content
-        info_pos = context.find('/INFO(')
-        if info_pos != -1:
-            info_start = context_start + info_pos + 6
-            info_len = 40  # Fixed length from Length parameter
-            st.write(f"\nEffacement contenu chiffré {info_start}-{info_start+info_len}:")
-            dump_buffer(processed_buffer, info_start, info_len, "Avant:")
-            processed_buffer[info_start:info_start+info_len] = b'\x00' * info_len
-            dump_buffer(processed_buffer, info_start, info_len, "Après:")
-        
-        # 4. Handle stream markers
-        endstream_pos = context.find('endstream', info_pos if info_pos != -1 else 0)
-        if endstream_pos != -1:
-            abs_end = context_start + endstream_pos
-            st.write(f"Marqueur endstream trouvé: {abs_end}")
             
-            # Look for stream begin
-            stream_pos = context.rfind('stream', 0, endstream_pos)
-            if stream_pos != -1:
-                abs_stream = context_start + stream_pos
-                st.write(f"Marqueur stream trouvé: {abs_stream}")
-                # Clear content between markers
-                st.write(f"Nettoyage contenu entre markers: {abs_stream+7}-{abs_end}")
-                processed_buffer[abs_stream+7:abs_end] = b'\x00' * (abs_end - (abs_stream+7))
+        # Effacer le contenu chiffré
+        info_pos = context.find('/INFO(')
+        endstream_pos = context.find('endstream', info_pos if info_pos != -1 else 0)
+        if info_pos != -1 and endstream_pos != -1:
+            # Début après /INFO(
+            content_start = pos + info_pos + 6
+            # Fin avant endstream
+            content_end = pos + endstream_pos
+            st.write(f"Effacement {content_start}-{content_end}")
+            processed_buffer[content_start:content_end] = b'\x00' * (content_end - content_start)
+        
+    return bytes(processed_buffer)
     
     st.write("\n=== FIN TRAITEMENT DRM ===")
     return bytes(processed_buffer)
