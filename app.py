@@ -1,4 +1,22 @@
 def process_drm(buffer, positions):
+    processed = bytearray(buffer)
+    
+    for pos in positions:
+        # 1. Remplacer le filtre
+        processed[pos:pos+18] = b'/Filter/FlateDecode'
+        
+        # 2. Changer V 1 en V 0
+        v_pos = pos + context.find('/V 1', pos)
+        if v_pos != -1:
+            processed[v_pos+3] = ord('0')
+            
+        # 3. Effacer le stream
+        stream_pos = pos + context.find('/INFO(', pos)
+        if stream_pos != -1:
+            stream_end = pos + context.find('endstream', stream_pos)
+            processed[stream_pos:stream_end] = b'\x00' * (stream_end - stream_pos)
+            
+    return bytes(processed)def process_drm(buffer, positions):
     processed_buffer = bytearray(buffer)
     
     for pos in positions:
