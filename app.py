@@ -60,32 +60,26 @@ def search_fileopen_signature(pdf_bytes):
         'code': {'found': 'NORBJ' in content_latin or 'NORBJ' in content_utf8, 'signature': 'NORBJ'}
     }
 
-def process_buffer(buffer, signatures):
+def process_buffer(buffer, filter_pos):
     """Traite le buffer PDF pour retirer la protection FileOpen."""
     processed_buffer = bytearray(buffer)
     
-    if signatures['foweb']['found']:
-        try:
-            # On cherche la position exacte du code NORBJ
-            content = buffer.decode('latin-1', errors='ignore')
-            code_pos = content.find('Code=')
+    try:
+        # La clé est appliquée après le filtre
+        key = b'NORBJ'
+        key_pos = filter_pos + len('/FOPN_foweb')  # Position après le filtre
+        
+        # Affichage du contexte avant modification
+        st.write(f"Zone de modification (avant):", processed_buffer[key_pos:key_pos+20].hex())
+        
+        # Application de la clé
+        for i, byte in enumerate(key):
+            processed_buffer[key_pos + i] = byte
             
-            if code_pos != -1:
-                st.write(f"Position 'Code=' trouvée: {code_pos}")
-                # Affichage du contexte
-                context_start = max(0, code_pos - 20)
-                context_end = min(len(content), code_pos + 30)
-                st.write("Contexte:", content[context_start:context_end])
-                
-                # Application de la clé NORBJ après 'Code='
-                key = b'NORBJ'
-                key_pos = code_pos + 5  # Position après 'Code='
-                for i, byte in enumerate(key):
-                    processed_buffer[key_pos + i] = byte
-                    
-                st.write(f"Clé NORBJ appliquée à la position {key_pos}")
-        except Exception as e:
-            st.error(f"Erreur lors du traitement de la clé: {str(e)}")
+        st.write(f"Zone de modification (après):", processed_buffer[key_pos:key_pos+20].hex())
+        
+    except Exception as e:
+        st.error(f"Erreur lors du traitement de la clé: {str(e)}")
     
     return bytes(processed_buffer)
 
