@@ -13,16 +13,29 @@ from pathlib import Path
 
 def process_buffer(buffer):
     """Traite le buffer PDF pour retirer la protection FileOpen."""
-    key = b'NORBJ'
+    # Convertir en bytearray pour modification
     processed_buffer = bytearray(buffer)
     
-    # Recherche de la signature FileOpen
-    content = buffer.decode('latin-1')
-    if 'FOPN_foweb' in content:
-        # Application de la clé de 5 octets
-        for i in range(5):
-            processed_buffer[i] = key[i]
-    
+    try:
+        # Recherche de la signature FileOpen dans les premiers Ko du fichier
+        header = buffer[:4096].decode('latin-1')
+        if 'FOPN_foweb' in header:
+            # On cherche la position exacte de la clé
+            key_position = header.find('Code=NORBJ')
+            if key_position != -1:
+                # On préserve l'en-tête PDF
+                if key_position > 4:  # On s'assure de ne pas écraser le %PDF
+                    key = b'NORBJ'
+                    for i, byte in enumerate(key):
+                        processed_buffer[key_position + i] = byte
+            st.write("FileOpen trouvé et traité à la position:", key_position)
+    except Exception as e:
+        st.write("Erreur lors du traitement:", str(e))
+        
+    # Vérification de l'en-tête PDF
+    if processed_buffer[:4] != b'%PDF':
+        st.error("Attention: En-tête PDF corrompue")
+        
     return bytes(processed_buffer)
 
 def extract_text_from_pdf(buffer):
@@ -62,12 +75,16 @@ def analyze_pdf(file_bytes):
     """Analyse un fichier PDF pour détecter la protection FileOpen."""
     try:
         # Vérification du format PDF
-        if not file_bytes.startswith(b'%PDF'):
+        if file_bytes[:4] != b'%PDF':
             raise ValueError("Format de fichier non valide - Ce n'est pas un PDF")
-
-        # Analyse du contenu
-        content = file_bytes.decode('latin-1')
-        has_fileopen = 'FOPN_foweb' in content
+            
+        st.write("En-tête PDF valide détectée")
+        
+        # Analyse du contenu des premiers Ko pour la signature FileOpen
+        header = file_bytes[:4096].decode('latin-1')
+        has_fileopen = 'FOPN_foweb' in header
+        
+        st.write("Protection FileOpen détectée:", has_fileopen)
 
         # Construction des infos DRM
         drm_info = {
@@ -81,12 +98,17 @@ def analyze_pdf(file_bytes):
 
         if has_fileopen:
             processed_buffer = process_buffer(file_bytes)
+            # Vérification finale
+            if processed_buffer[:4] != b'%PDF':
+                raise ValueError("Le traitement a corrompu l'en-tête PDF")
         else:
             processed_buffer = file_bytes
 
         return drm_info, processed_buffer
+        
     except Exception as e:
-        raise ValueError(f"Erreur lors de l'analyse du PDF: {str(e)}")
+        st.error(f"Erreur lors de l'analyse du PDF: {str(e)}")
+        raise
 
 def main():
     st.set_page_config(page_title="Analyse DRM FileOpen", layout="wide")
