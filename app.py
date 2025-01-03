@@ -19,26 +19,51 @@ def find_all_occurrences(text, pattern):
 def find_parameter(context, param):
     """Trouve la valeur d'un paramètre dans le contexte."""
     try:
-        start = context.find(f'/{param}')
-        if start == -1:
-            return None
-            
-        # Cherche la valeur
-        after_param = context[start + len(param) + 1:]
-        if after_param.startswith('('):
-            end = after_param.find(')')
-            if end != -1:
-                return after_param[1:end]
-        else:
-            # Pour les valeurs numériques
-            value = ''
-            for char in after_param:
-                if char.isdigit() or char == '.':
-                    value += char
+        st.write(f"Recherche du paramètre {param}")
+        
+        # Différentes formes possibles du paramètre
+        param_forms = [
+            f'/{param} ',   # Pour les valeurs numériques: /V 1
+            f'/{param}(',   # Pour les valeurs entre parenthèses: /VEID(3.5)
+            f'/{param}/',   # Pour les chemins: /Filter/FOPN
+            f'/{param}<<'   # Pour les dictionnaires
+        ]
+        
+        # Cherche toutes les occurrences possibles
+        for form in param_forms:
+            start = context.find(form)
+            if start != -1:
+                st.write(f"Trouvé {form} à la position {start}")
+                
+                # Position après le marqueur
+                pos = start + len(form)
+                
+                # Si c'est une valeur entre parenthèses
+                if form.endswith('('):
+                    end = context.find(')', pos)
+                    if end != -1:
+                        value = context[pos:end]
+                        st.write(f"Valeur trouvée (parenthèses): '{value}'")
+                        return value
+                
+                # Si c'est une valeur numérique
                 else:
-                    break
-            return value if value else None
-    except:
+                    # Prend tous les caractères jusqu'au prochain séparateur
+                    value = ''
+                    for char in context[pos:pos+10]:  # limite à 10 caractères
+                        if char in '0123456789.':
+                            value += char
+                        else:
+                            break
+                    if value:
+                        st.write(f"Valeur trouvée (numérique): '{value}'")
+                        return value
+        
+        st.write(f"Paramètre {param} non trouvé")
+        return None
+                    
+    except Exception as e:
+        st.error(f"Erreur lors de la recherche du paramètre {param}: {str(e)}")
         return None
 
 def modify_filter_params(buffer, filter_pos):
