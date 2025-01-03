@@ -3,6 +3,10 @@ import io
 import PyPDF2
 from docx import Document
 import fitz  # PyMuPDF
+import logging
+
+# Configuration du logging
+logging.basicConfig(level=logging.DEBUG)
 import tempfile
 import os
 from pathlib import Path
@@ -24,9 +28,21 @@ def process_buffer(buffer):
 def extract_text_from_pdf(buffer):
     """Extrait le texte d'un PDF en utilisant PyMuPDF."""
     text = ""
-    with fitz.open(stream=buffer, filetype="pdf") as doc:
-        for page in doc:
-            text += page.get_text() + "\n\n"
+    # Création d'un fichier temporaire
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+        temp_file.write(buffer)
+        temp_file_path = temp_file.name
+
+    try:
+        # Ouverture du fichier temporaire
+        with fitz.open(temp_file_path) as doc:
+            for page in doc:
+                text += page.get_text() + "\n\n"
+    finally:
+        # Nettoyage du fichier temporaire
+        if os.path.exists(temp_file_path):
+            os.unlink(temp_file_path)
+            
     return text
 
 def create_word_document(text):
@@ -81,8 +97,16 @@ def main():
 
     if uploaded_file:
         try:
+            # Debug information
+            st.write("Type du fichier uploadé:", type(uploaded_file))
+            
             # Lecture et analyse du fichier
             file_bytes = uploaded_file.getvalue()
+            st.write("Taille du fichier:", len(file_bytes), "bytes")
+            
+            # Vérification du contenu
+            st.write("Premiers octets:", file_bytes[:10].hex())
+            
             drm_info, processed_buffer = analyze_pdf(file_bytes)
 
             # Affichage des résultats
