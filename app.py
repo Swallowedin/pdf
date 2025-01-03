@@ -1,4 +1,59 @@
-import streamlit as st
+def process_drm(buffer, positions):
+    processed_buffer = bytearray(buffer)
+    
+    for pos in positions:
+        # Recherche de la séquence object/stream
+        pre_context = buffer[max(0,pos-1000):pos+1000].decode('latin-1', errors='ignore')
+        
+        # Trouver les points clés
+        end_stream_marker = "endstream"
+        end_obj_marker = "endobj"
+        obj_marker = " 0 obj"
+        stream_marker = "stream\n"
+        
+        # Délimiter la zone à traiter
+        end_stream_pos = pre_context.find(end_stream_marker)
+        end_obj_pos = pre_context.find(end_obj_marker, end_stream_pos)
+        next_obj_pos = pre_context.find(obj_marker, end_obj_pos)
+        next_stream_pos = pre_context.find(stream_marker, next_obj_pos)
+        
+        if all(x != -1 for x in [end_stream_pos, end_obj_pos, next_obj_pos, next_stream_pos]):
+            abs_pos = max(0,pos-1000)
+            
+            st.write(f"Structure trouvée:")
+            st.write(f"- endstream: {abs_pos + end_stream_pos}")
+            st.write(f"- endobj: {abs_pos + end_obj_pos}")
+            st.write(f"- nouvel obj: {abs_pos + next_obj_pos}")
+            st.write(f"- stream: {abs_pos + next_stream_pos}")
+            
+            # 1. Modifier l'en-tête de l'objet
+            header_start = abs_pos + next_obj_pos
+            header_end = abs_pos + next_stream_pos
+            header = pre_context[next_obj_pos:next_stream_pos]
+            
+            # Modifier FOPN
+            filter_pos = header.find('/Filter/FOPN_foweb')
+            if filter_pos != -1:
+                abs_filter_pos = header_start + filter_pos
+                processed_buffer[abs_filter_pos:abs_filter_pos+18] = b'/Filter/FlateDecode'
+            
+            # Modifier V
+            v_pos = header.find('/V 1')
+            if v_pos != -1:
+                abs_v_pos = header_start + v_pos + 3
+                processed_buffer[abs_v_pos] = ord('0')
+            
+            # 2. Effacer le contenu du stream
+            content_start = abs_pos + next_stream_pos + len(stream_marker)
+            next_end_stream = pre_context.find(end_stream_marker, next_stream_pos)
+            content_end = abs_pos + next_end_stream
+            
+            st.write(f"Effacement contenu {content_start}-{content_end}")
+            dump_buffer(buffer, content_start, min(50, content_end-content_start), "Avant:")
+            processed_buffer[content_start:content_end] = b'\x00' * (content_end - content_start)
+            dump_buffer(processed_buffer, content_start, min(50, content_end-content_start), "Après:")
+    
+    return bytes(processed_buffer)import streamlit as st
 import io
 import logging
 from pathlib import Path
