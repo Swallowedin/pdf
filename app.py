@@ -1,4 +1,52 @@
-import streamlit as st
+def process_drm(buffer, positions):
+    """Déprotection complète du DRM FileOpen."""
+    processed_buffer = bytearray(buffer)
+    
+    for pos in positions:
+        context = buffer[pos:pos+500].decode('latin-1', errors='ignore')
+        st.write(f"\nOccurrence trouvée à la position {pos}:")
+        st.write("Contexte:", context)
+        
+        # SVID
+        svid_pos = context.find('SVID(')
+        if svid_pos != -1:
+            abs_svid_start = pos + context.find('(', svid_pos) + 1
+            abs_svid_end = pos + context.find(')', svid_pos)
+            replacement = b'NORBJ' + b' ' * (abs_svid_end - abs_svid_start - 5)
+            for i, byte in enumerate(replacement):
+                processed_buffer[abs_svid_start + i] = byte
+        
+        # Paramètre V
+        v_pos = context.find('/V ')
+        if v_pos != -1:
+            abs_v_pos = pos + v_pos + 3
+            processed_buffer[abs_v_pos:abs_v_pos+1] = b'0'
+        
+        # Length (mettre à 0)
+        length_pos = context.find('/Length ')
+        if length_pos != -1:
+            abs_length_pos = pos + length_pos + 7
+            end_pos = context.find('/', abs_length_pos - pos)
+            if end_pos != -1:
+                length = int(context[length_pos+7:end_pos].strip())
+                # Remplacer la valeur par des zéros
+                for i in range(length):
+                    if 'endstream' in context[end_pos:end_pos+100]:
+                        stream_end = pos + context.find('endstream', end_pos)
+                        for j in range(abs_length_pos, stream_end):
+                            processed_buffer[j] = 0
+        
+        # Retrait du filtre FOPN
+        filter_pos = context.find('/Filter/FOPN_foweb')
+        if filter_pos != -1:
+            # Remplacer par un filtre standard
+            replacement = b'/Filter/FlateDecode'
+            abs_filter_pos = pos + filter_pos
+            for i, byte in enumerate(replacement):
+                if abs_filter_pos + i < len(processed_buffer):
+                    processed_buffer[abs_filter_pos + i] = byte
+    
+    return bytes(processed_buffer)import streamlit as st
 import io
 import logging
 from pathlib import Path
