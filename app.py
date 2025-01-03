@@ -27,29 +27,34 @@ def process_buffer(buffer, filter_position):
     processed_buffer = bytearray(buffer)
     
     try:
-        # La clé est appliquée dans l'objet contenant le filtre
+        # La clé est appliquée après les paramètres du filtre
+        # On cherche la fin de la déclaration FOPN_foweb
         key = b'NORBJ'
         
-        # On cherche le début de l'objet
-        obj_marker = b'obj<<'
-        # On cherche en arrière à partir du filtre
-        start_search = max(0, filter_position - 50)
-        obj_pos = buffer[start_search:filter_position].find(obj_marker)
-        if obj_pos != -1:
-            key_pos = start_search + obj_pos + len(obj_marker)
+        # On cherche le SVID qui vient après FOPN_foweb
+        content = buffer[filter_position:filter_position+200].decode('latin-1', errors='ignore')
+        svid_pos = content.find('SVID')
+        
+        if svid_pos != -1:
+            # Position absolue pour SVID
+            abs_svid_pos = filter_position + svid_pos
             
-            # Debug info
-            st.write(f"Position de l'objet trouvée: {key_pos}")
-            st.write("Contenu avant modification:", processed_buffer[key_pos:key_pos+20].hex())
+            st.write(f"Position SVID trouvée à: {abs_svid_pos}")
+            st.write("Contexte:", content[svid_pos-10:svid_pos+20])
             
-            # Application de la clé
+            # On insère la clé juste avant SVID
+            st.write("Contenu avant modification:", processed_buffer[abs_svid_pos-5:abs_svid_pos+5].hex())
             for i, byte in enumerate(key):
-                processed_buffer[key_pos + i] = byte
-                
-            st.write("Contenu après modification:", processed_buffer[key_pos:key_pos+20].hex())
+                processed_buffer[abs_svid_pos + i] = byte
+            st.write("Contenu après modification:", processed_buffer[abs_svid_pos-5:abs_svid_pos+5].hex())
+            
+        else:
+            st.error("Position SVID non trouvée")
+            return buffer
             
     except Exception as e:
         st.error(f"Erreur lors du traitement de la clé: {str(e)}")
+        return buffer
     
     return bytes(processed_buffer)
 
