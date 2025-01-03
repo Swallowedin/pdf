@@ -1,4 +1,51 @@
-import streamlit as st
+def process_drm(buffer, positions):
+    processed_buffer = bytearray(buffer)
+    
+    for pos in positions:
+        # Trouver l'objet PDF
+        pre_context = buffer[max(0,pos-1000):pos].decode('latin-1', errors='ignore')
+        obj_marker = pre_context.rfind(' 0 obj')
+        if obj_marker != -1:
+            # ID de l'objet
+            obj_num_start = pre_context.rfind('\n', 0, obj_marker)
+            if obj_num_start != -1:
+                obj_id = pre_context[obj_num_start:obj_marker].strip()
+                st.write(f"Traitement de l'objet: {obj_id}")
+            
+            # Début de l'objet
+            abs_obj_start = max(0,pos-1000) + obj_marker
+            st.write(f"Début obj: {abs_obj_start}")
+            dump_buffer(buffer, abs_obj_start, 50, "Header objet:")
+                
+        # Chercher séquence stream/endstream
+        context = buffer[pos-100:pos+1000].decode('latin-1', errors='ignore')
+        stream_pos = context.find('stream\n')  # Le \n est important
+        endstream_pos = context.find('endstream')
+        
+        if stream_pos != -1 and endstream_pos != -1:
+            abs_stream_start = (pos-100) + stream_pos + 7  # +7 pour skip 'stream\n'
+            abs_stream_end = (pos-100) + endstream_pos
+            st.write(f"Stream: {abs_stream_start}-{abs_stream_end}")
+            
+            # Corriger l'en-tête avant stream
+            filter_pos = context.find('/Filter/FOPN_foweb')
+            if filter_pos != -1:
+                abs_filter_pos = (pos-100) + filter_pos
+                st.write(f"Remplacement filtre: {abs_filter_pos}")
+                processed_buffer[abs_filter_pos:abs_filter_pos+18] = b'/Filter/FlateDecode'
+                
+            # Mettre V à 0    
+            v_pos = context.find('/V 1')
+            if v_pos != -1:
+                abs_v_pos = (pos-100) + v_pos + 3
+                st.write(f"Modification V: {abs_v_pos}")
+                processed_buffer[abs_v_pos] = ord('0')
+            
+            # Effacer contenu chiffré entre stream et endstream
+            st.write(f"Effacement contenu: {abs_stream_start}-{abs_stream_end}")
+            processed_buffer[abs_stream_start:abs_stream_end] = b'\x00' * (abs_stream_end - abs_stream_start)
+    
+    return bytes(processed_buffer)import streamlit as st
 import io
 import logging
 from pathlib import Path
