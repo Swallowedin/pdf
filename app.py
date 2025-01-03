@@ -2,12 +2,23 @@ import streamlit as st
 import io
 import logging
 from pathlib import Path
+import PyPDF2
 
-# Configuration du logging
 logging.basicConfig(level=logging.DEBUG)
 
+def extract_text_from_pdf(buffer):
+    """Extrait le texte d'un PDF."""
+    try:
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(buffer))
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        return text
+    except Exception as e:
+        st.error(f"Erreur lors de l'extraction du texte: {str(e)}")
+        return None
+
 def find_all_occurrences(text, pattern):
-    """Trouve toutes les occurrences d'un pattern dans le texte."""
     pos = 0
     while True:
         pos = text.find(pattern, pos)
@@ -17,40 +28,28 @@ def find_all_occurrences(text, pattern):
         pos += 1
 
 def find_parameter(context, param):
-    """Trouve la valeur d'un paramètre dans le contexte."""
     try:
         st.write(f"Recherche du paramètre {param}")
-        
-        # Différentes formes possibles du paramètre
         param_forms = [
-            f'/{param} ',   # Pour les valeurs numériques: /V 1
-            f'/{param}(',   # Pour les valeurs entre parenthèses: /VEID(3.5)
-            f'/{param}/',   # Pour les chemins: /Filter/FOPN
-            f'/{param}<<'   # Pour les dictionnaires
+            f'/{param} ',
+            f'/{param}(',
+            f'/{param}/',
+            f'/{param}<<'
         ]
-        
-        # Cherche toutes les occurrences possibles
         for form in param_forms:
             start = context.find(form)
             if start != -1:
                 st.write(f"Trouvé {form} à la position {start}")
-                
-                # Position après le marqueur
                 pos = start + len(form)
-                
-                # Si c'est une valeur entre parenthèses
                 if form.endswith('('):
                     end = context.find(')', pos)
                     if end != -1:
                         value = context[pos:end]
                         st.write(f"Valeur trouvée (parenthèses): '{value}'")
                         return value
-                
-                # Si c'est une valeur numérique
                 else:
-                    # Prend tous les caractères jusqu'au prochain séparateur
                     value = ''
-                    for char in context[pos:pos+10]:  # limite à 10 caractères
+                    for char in context[pos:pos+10]:
                         if char in '0123456789.':
                             value += char
                         else:
@@ -58,89 +57,70 @@ def find_parameter(context, param):
                     if value:
                         st.write(f"Valeur trouvée (numérique): '{value}'")
                         return value
-        
         st.write(f"Paramètre {param} non trouvé")
         return None
-                    
     except Exception as e:
         st.error(f"Erreur lors de la recherche du paramètre {param}: {str(e)}")
         return None
 
 def modify_filter_params(buffer, filter_pos):
-    """Modifie les paramètres du filtre."""
     processed_buffer = bytearray(buffer)
     content = buffer[filter_pos:filter_pos+200].decode('latin-1', errors='ignore')
-    
-    # Modification du paramètre V
     v_pos = content.find('/V ')
     if v_pos != -1:
         abs_pos = filter_pos + v_pos + 3
-        processed_buffer[abs_pos:abs_pos+1] = b'0'  # Change V 1 en V 0
+        processed_buffer[abs_pos:abs_pos+1] = b'0'
         st.write(f"Modification du paramètre V à la position {abs_pos}")
-        
     return processed_buffer
 
 def apply_key_to_svid(buffer, filter_pos):
-    """Applique la clé NORBJ au champ SVID."""
     processed_buffer = bytearray(buffer)
     content = buffer[filter_pos:filter_pos+200].decode('latin-1', errors='ignore')
-    
     svid_pos = content.find('SVID(')
     if svid_pos != -1:
         value_start = content.find('(', svid_pos)
         value_end = content.find(')', svid_pos)
-        
         if value_start != -1 and value_end != -1:
             abs_value_start = filter_pos + value_start + 1
             abs_value_end = filter_pos + value_end
-            
             st.write(f"Position début valeur SVID: {abs_value_start}")
             st.write(f"Position fin valeur SVID: {abs_value_end}")
             st.write("Valeur actuelle:", content[value_start+1:value_end])
-            
             key = b'NORBJ'
             field_length = abs_value_end - abs_value_start
             replacement = key + b' ' * (field_length - len(key))
-            
             st.write("Contenu avant modification:", 
                 processed_buffer[abs_value_start:abs_value_end].hex())
-            
             for i, byte in enumerate(replacement):
                 processed_buffer[abs_value_start + i] = byte
-                
             st.write("Contenu après modification:", 
                 processed_buffer[abs_value_start:abs_value_end].hex())
-    
     return processed_buffer
 
 def process_drm(buffer, positions):
-    """Traite toutes les occurrences de la protection."""
     processed_buffer = bytearray(buffer)
-    
     for pos in positions:
-        # 1. Modification du SVID
         processed_buffer = apply_key_to_svid(processed_buffer, pos)
-        # 2. Modification des paramètres V et Length
         processed_buffer = modify_filter_params(processed_buffer, pos)
-        
     return bytes(processed_buffer)
 
 def analyze_pdf(file_bytes):
-    """Analyse un fichier PDF pour détecter la protection FileOpen."""
     try:
         if file_bytes[:4] != b'%PDF':
             raise ValueError("Format de fichier non valide - Ce n'est pas un PDF")
         
         st.write("En-tête PDF valide détectée")
         
-        # Décodage du contenu
-        content_latin = file_bytes.decode('latin-1', errors='ignore')
+        # Extraction du texte
+        extracted_text = extract_text_from_pdf(file_bytes)
+        if extracted_text:
+            st.write("### Contenu textuel extrait du PDF:")
+            st.text_area("Texte extrait", extracted_text, height=200)
         
-        # Recherche de tous les objets avec FOPN_foweb
+        content_latin = file_bytes.decode('latin-1', errors='ignore')
         matches = list(find_all_occurrences(content_latin, '/FOPN_foweb'))
         st.write(f"Nombre d'occurrences de FOPN_foweb trouvées: {len(matches)}")
         
-        # Analyse du contexte pour chaque occurrence
         for i, pos in enumerate(matches):
             context_start = max(0, pos - 100)
             context_end = min(len(content_latin), pos + 200)
@@ -148,7 +128,6 @@ def analyze_pdf(file_bytes):
             st.write(f"\nOccurrence {i+1} à la position {pos}:")
             st.write("Contexte étendu:", context)
             
-            # Recherche de paramètres spécifiques
             params = {
                 'V': find_parameter(context, 'V'),
                 'Length': find_parameter(context, 'Length'),
@@ -159,7 +138,6 @@ def analyze_pdf(file_bytes):
             }
             st.write("Paramètres trouvés:", params)
         
-        # Cherche les autres filtres PDF dans le document
         filters = ['FlateDecode', 'DCTDecode', 'ASCII85Decode']
         for filter_name in filters:
             if f'/{filter_name}' in content_latin:
@@ -180,7 +158,7 @@ def analyze_pdf(file_bytes):
         else:
             processed_buffer = file_bytes
         
-        return drm_info, processed_buffer
+        return drm_info, processed_buffer, extracted_text
         
     except Exception as e:
         st.error(f"Erreur lors de l'analyse du PDF: {str(e)}")
@@ -194,19 +172,15 @@ def main():
     
     if uploaded_file:
         try:
-            # Debug information
             st.write("Type du fichier uploadé:", type(uploaded_file))
             st.write("Attributs du fichier:", dir(uploaded_file))
             
-            # Lecture du fichier
             file_bytes = uploaded_file.getvalue()
             st.write("Taille du fichier:", len(file_bytes), "bytes")
             st.write("Premiers octets:", file_bytes[:10].hex())
             
-            # Analyse du PDF
-            drm_info, processed_buffer = analyze_pdf(file_bytes)
+            drm_info, processed_buffer, extracted_text = analyze_pdf(file_bytes)
             
-            # Affichage des résultats
             st.header("Résultats de l'analyse")
             
             col1, col2 = st.columns(2)
@@ -223,7 +197,16 @@ def main():
                     "Dans un contexte de production, il est recommandé d'utiliser des méthodes de protection plus robustes."
                 )
                 
-                # Option de téléchargement
+                if extracted_text:
+                    with open("extracted_text.txt", "w", encoding="utf-8") as f:
+                        f.write(extracted_text)
+                    st.download_button(
+                        "Télécharger le texte extrait",
+                        extracted_text,
+                        file_name=f"{uploaded_file.name.replace('.pdf', '')}_text.txt",
+                        mime="text/plain"
+                    )
+                
                 st.download_button(
                     "Télécharger PDF traité",
                     processed_buffer,
