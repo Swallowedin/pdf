@@ -28,37 +28,42 @@ def process_buffer(buffer, filter_position):
     
     try:
         # La clé est appliquée dans le champ pdftools
-        key = b'NORBJ'
+        key = b'NORBJ\x00'  # Ajout d'un octet nul pour terminer la chaîne
         
         # On cherche SVID(pdftools)
         content = buffer[filter_position:filter_position+200].decode('latin-1', errors='ignore')
         svid_pos = content.find('SVID(')
         
         if svid_pos != -1:
-            # On cherche la parenthèse ouvrante
+            # Position de la parenthèse ouvrante et fermante
             value_start = content.find('(', svid_pos)
-            if value_start != -1:
-                # Position absolue pour le début de la valeur
-                abs_value_pos = filter_position + value_start + 1
+            value_end = content.find(')', value_start)
+            
+            if value_start != -1 and value_end != -1:
+                # Positions absolues pour le remplacement
+                abs_value_start = filter_position + value_start + 1
+                abs_value_end = filter_position + value_end
                 
-                st.write(f"Position de la valeur SVID trouvée à: {abs_value_pos}")
-                st.write("Contexte avant modification:", 
-                    content[svid_pos:svid_pos+30])
+                st.write(f"Position début valeur: {abs_value_start}")
+                st.write(f"Position fin valeur: {abs_value_end}")
+                st.write("Valeur actuelle:", content[value_start+1:value_end])
                 
-                # On écrit la clé au début de la valeur
+                # On remplace tout le contenu entre parenthèses
+                replacement = key + b' ' * (abs_value_end - abs_value_start - len(key))
+                
                 st.write("Contenu avant modification:", 
-                    processed_buffer[abs_value_pos:abs_value_pos+10].hex())
+                    processed_buffer[abs_value_start:abs_value_end].hex())
                 
-                for i, byte in enumerate(key):
-                    processed_buffer[abs_value_pos + i] = byte
+                for i, byte in enumerate(replacement):
+                    processed_buffer[abs_value_start + i] = byte
                     
                 st.write("Contenu après modification:", 
-                    processed_buffer[abs_value_pos:abs_value_pos+10].hex())
+                    processed_buffer[abs_value_start:abs_value_end].hex())
                     
                 st.write("Contexte après modification:", 
                     processed_buffer[filter_position+svid_pos:filter_position+svid_pos+30].decode('latin-1', errors='ignore'))
             else:
-                st.error("Valeur SVID non trouvée")
+                st.error("Structure SVID(...) invalide")
                 return buffer
         else:
             st.error("Tag SVID non trouvé")
