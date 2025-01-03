@@ -1,91 +1,82 @@
 import streamlit as st
 import io
-import PyPDF2
-from docx import Document
-import fitz  # PyMuPDF
 import logging
-
-# Configuration du logging
-logging.basicConfig(level=logging.DEBUG)
 import tempfile
 import os
 from pathlib import Path
 
-def process_buffer(buffer):
+# Configuration du logging
+logging.basicConfig(level=logging.DEBUG)
+
+def search_fileopen_signature(pdf_bytes):
+    """Recherche les signatures FileOpen dans le PDF."""
+    # On cherche dans tout le fichier, pas seulement l'en-tête
+    content = pdf_bytes.hex()
+    signatures = {
+        'foweb': 'FOPN_foweb',
+        'drm': 'FileOpen',
+        'code': 'NORBJ'
+    }
+    
+    results = {}
+    for key, signature in signatures.items():
+        # Recherche en binaire et en texte
+        hex_sig = signature.encode('ascii').hex()
+        results[key] = {
+            'found': hex_sig in content or signature in pdf_bytes.decode('latin-1', errors='ignore'),
+            'signature': signature
+        }
+    
+    return results
+
+def process_buffer(buffer, signatures):
     """Traite le buffer PDF pour retirer la protection FileOpen."""
-    # Convertir en bytearray pour modification
     processed_buffer = bytearray(buffer)
     
-    try:
-        # Recherche de la signature FileOpen dans les premiers Ko du fichier
-        header = buffer[:4096].decode('latin-1')
-        if 'FOPN_foweb' in header:
-            # On cherche la position exacte de la clé
-            key_position = header.find('Code=NORBJ')
-            if key_position != -1:
-                # On préserve l'en-tête PDF
-                if key_position > 4:  # On s'assure de ne pas écraser le %PDF
-                    key = b'NORBJ'
-                    for i, byte in enumerate(key):
-                        processed_buffer[key_position + i] = byte
-            st.write("FileOpen trouvé et traité à la position:", key_position)
-    except Exception as e:
-        st.write("Erreur lors du traitement:", str(e))
-        
-    # Vérification de l'en-tête PDF
-    if processed_buffer[:4] != b'%PDF':
-        st.error("Attention: En-tête PDF corrompue")
-        
-    return bytes(processed_buffer)
-
-def extract_text_from_pdf(buffer):
-    """Extrait le texte d'un PDF en utilisant PyMuPDF."""
-    text = ""
-    # Création d'un fichier temporaire
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
-        temp_file.write(buffer)
-        temp_file_path = temp_file.name
-
-    try:
-        # Ouverture du fichier temporaire
-        with fitz.open(temp_file_path) as doc:
-            for page in doc:
-                text += page.get_text() + "\n\n"
-    finally:
-        # Nettoyage du fichier temporaire
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
+    if signatures['foweb']['found']:
+        try:
+            # On cherche la position exacte du code NORBJ
+            content = buffer.decode('latin-1', errors='ignore')
+            code_pos = content.find('Code=')
             
-    return text
-
-def create_word_document(text):
-    """Crée un document Word à partir du texte."""
-    doc = Document()
-    for paragraph in text.split('\n'):
-        if paragraph.strip():
-            doc.add_paragraph(paragraph)
+            if code_pos != -1:
+                st.write(f"Position 'Code=' trouvée: {code_pos}")
+                # Affichage du contexte
+                context_start = max(0, code_pos - 20)
+                context_end = min(len(content), code_pos + 30)
+                st.write("Contexte:", content[context_start:context_end])
+                
+                # Application de la clé NORBJ après 'Code='
+                key = b'NORBJ'
+                key_pos = code_pos + 5  # Position après 'Code='
+                for i, byte in enumerate(key):
+                    processed_buffer[key_pos + i] = byte
+                    
+                st.write(f"Clé NORBJ appliquée à la position {key_pos}")
+        except Exception as e:
+            st.error(f"Erreur lors du traitement de la clé: {str(e)}")
     
-    # Sauvegarde dans un buffer
-    docx_buffer = io.BytesIO()
-    doc.save(docx_buffer)
-    docx_buffer.seek(0)
-    return docx_buffer
+    return bytes(processed_buffer)
 
 def analyze_pdf(file_bytes):
     """Analyse un fichier PDF pour détecter la protection FileOpen."""
     try:
-        # Vérification du format PDF
+        # Vérification de l'en-tête PDF
         if file_bytes[:4] != b'%PDF':
             raise ValueError("Format de fichier non valide - Ce n'est pas un PDF")
             
         st.write("En-tête PDF valide détectée")
         
-        # Analyse du contenu des premiers Ko pour la signature FileOpen
-        header = file_bytes[:4096].decode('latin-1')
-        has_fileopen = 'FOPN_foweb' in header
+        # Recherche des signatures FileOpen
+        signatures = search_fileopen_signature(file_bytes)
         
-        st.write("Protection FileOpen détectée:", has_fileopen)
+        # Affichage des résultats de recherche
+        st.write("Résultats de la recherche de signatures :")
+        for key, result in signatures.items():
+            st.write(f"- {result['signature']}: {'trouvé' if result['found'] else 'non trouvé'}")
 
+        has_fileopen = signatures['foweb']['found']
+        
         # Construction des infos DRM
         drm_info = {
             'has_fileopen': has_fileopen,
@@ -97,10 +88,7 @@ def analyze_pdf(file_bytes):
         }
 
         if has_fileopen:
-            processed_buffer = process_buffer(file_bytes)
-            # Vérification finale
-            if processed_buffer[:4] != b'%PDF':
-                raise ValueError("Le traitement a corrompu l'en-tête PDF")
+            processed_buffer = process_buffer(file_bytes, signatures)
         else:
             processed_buffer = file_bytes
 
@@ -114,21 +102,22 @@ def main():
     st.set_page_config(page_title="Analyse DRM FileOpen", layout="wide")
     st.title("Analyse DRM FileOpen")
 
-    # Zone d'upload
     uploaded_file = st.file_uploader("Déposez votre PDF ici", type=['pdf'])
 
     if uploaded_file:
         try:
             # Debug information
             st.write("Type du fichier uploadé:", type(uploaded_file))
+            st.write("Attributs du fichier:", dir(uploaded_file))
             
-            # Lecture et analyse du fichier
+            # Lecture du fichier
             file_bytes = uploaded_file.getvalue()
             st.write("Taille du fichier:", len(file_bytes), "bytes")
             
-            # Vérification du contenu
+            # Affichage des premiers octets en hex pour debug
             st.write("Premiers octets:", file_bytes[:10].hex())
             
+            # Analyse du PDF
             drm_info, processed_buffer = analyze_pdf(file_bytes)
 
             # Affichage des résultats
@@ -148,45 +137,13 @@ def main():
                     "Dans un contexte de production, il est recommandé d'utiliser des méthodes de protection plus robustes."
                 )
 
-                # Options d'export
-                st.header("Exports disponibles")
-                
-                col1, col2, col3 = st.columns(3)
-                
-                # Export PDF
-                with col1:
-                    if st.button("Télécharger PDF sans DRM"):
-                        st.download_button(
-                            "Télécharger PDF",
-                            processed_buffer,
-                            file_name=f"{uploaded_file.name.replace('.pdf', '')}_processed.pdf",
-                            mime="application/pdf"
-                        )
-
-                # Export Word
-                with col2:
-                    if st.button("Exporter en Word"):
-                        with st.spinner("Conversion en cours..."):
-                            text = extract_text_from_pdf(processed_buffer)
-                            docx_buffer = create_word_document(text)
-                            st.download_button(
-                                "Télécharger DOCX",
-                                docx_buffer,
-                                file_name=f"{uploaded_file.name.replace('.pdf', '')}.docx",
-                                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                            )
-
-                # Export Texte
-                with col3:
-                    if st.button("Exporter en texte"):
-                        with st.spinner("Extraction du texte..."):
-                            text = extract_text_from_pdf(processed_buffer)
-                            st.download_button(
-                                "Télécharger TXT",
-                                text.encode(),
-                                file_name=f"{uploaded_file.name.replace('.pdf', '')}.txt",
-                                mime="text/plain"
-                            )
+                # Option de téléchargement
+                st.download_button(
+                    "Télécharger PDF traité",
+                    processed_buffer,
+                    file_name=f"{uploaded_file.name.replace('.pdf', '')}_processed.pdf",
+                    mime="application/pdf"
+                )
 
             # Détails techniques
             with st.expander("Détails techniques"):
@@ -194,7 +151,7 @@ def main():
 Structure du DRM FileOpen :
 RetVal=1&ServId=btq_afnor&DocuId=[ID]&Code=NORBJ&Perms=1
 
-• Clé de chiffrement : 5 octets statiques
+• Clé de chiffrement : 5 octets statiques (NORBJ)
 • Filtre PDF : FOPN_foweb
                 """)
 
