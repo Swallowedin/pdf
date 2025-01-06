@@ -1,3 +1,26 @@
+import streamlit as st
+import io
+import logging
+from pathlib import Path
+import PyPDF2
+
+logging.basicConfig(level=logging.DEBUG)
+
+def dump_buffer(buffer, start, length, prefix=""):
+    hex_dump = ' '.join([f"{b:02x}" for b in buffer[start:start+length]])
+    ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in buffer[start:start+length]])
+    st.write(f"{prefix} HEX: {hex_dump}")
+    st.write(f"{prefix} ASCII: {ascii_dump}")
+
+def find_all_occurrences(text, pattern):
+    pos = 0
+    while True:
+        pos = text.find(pattern, pos)
+        if pos == -1:
+            break
+        yield pos
+        pos += 1
+
 def process_drm(buffer, positions):
     processed = bytearray(buffer)
     
@@ -43,54 +66,6 @@ def process_drm(buffer, positions):
         except Exception as e:
             st.error(f"Erreur position {fopn_pos}: {str(e)}")
             continue
-            
-    return bytes(processed)import streamlit as st
-import io
-import logging
-from pathlib import Path
-import PyPDF2
-
-logging.basicConfig(level=logging.DEBUG)
-
-def dump_buffer(buffer, start, length, prefix=""):
-    hex_dump = ' '.join([f"{b:02x}" for b in buffer[start:start+length]])
-    ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in buffer[start:start+length]])
-    st.write(f"{prefix} HEX: {hex_dump}")
-    st.write(f"{prefix} ASCII: {ascii_dump}")
-
-def find_all_occurrences(text, pattern):
-    pos = 0
-    while True:
-        pos = text.find(pattern, pos)
-        if pos == -1:
-            break
-        yield pos
-        pos += 1
-
-def process_drm(buffer, positions):
-    processed = bytearray(buffer)
-    for pos in positions:
-        # 1. Trouver le bloc FileOpen
-        context = buffer[pos:pos+1000].decode('latin-1', errors='ignore')
-        
-        # 2. Remplacer FOPN par FlateDecode
-        processed[pos:pos+18] = b'/Filter/FlateDecode'
-        st.write(f"Filtre remplacé à {pos}")
-        
-        # 3. Changer V=1 en V=0
-        v_pos = context.find('/V 1')
-        if v_pos != -1:
-            v_abs = pos + v_pos + 3
-            processed[v_abs] = ord('0')
-            st.write(f"V modifié à {v_abs}")
-        
-        # 4. Remplacer le stream chiffré
-        info_pos = context.find('/INFO(')
-        if info_pos != -1:
-            stream_start = pos + info_pos
-            stream_end = stream_start + context[info_pos:].find('endstream')
-            st.write(f"Stream effacé: {stream_start}-{stream_end}")
-            processed[stream_start:stream_end] = b'\x00' * (stream_end - stream_start)
             
     return bytes(processed)
 
