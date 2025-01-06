@@ -1,7 +1,6 @@
 import streamlit as st
 import io
 import logging
-import re
 from pathlib import Path
 import PyPDF2
 from openai import OpenAI
@@ -9,165 +8,164 @@ import json
 import hashlib
 from datetime import datetime
 import traceback
+import re
 
 # Configuration du logging
 logging.basicConfig(level=logging.DEBUG, 
                    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialisation de l'API OpenAI avec la clé depuis les secrets
+# Initialisation de l'API OpenAI
 @st.cache_resource
 def get_openai_client():
     try:
-        openai_api_key = st.secrets["openai_api_key"]
-        return OpenAI(api_key=openai_api_key)
+        client = OpenAI(api_key=st.secrets["openai_api_key"])
+        return client
     except Exception as e:
         logger.error(f"Erreur d'initialisation OpenAI: {str(e)}")
         return None
 
-def cache_key(context):
-    """Génère une clé de cache unique pour le contexte"""
-    return hashlib.md5(context.encode()).hexdigest()
-
-@st.cache_data(ttl=3600)  # Cache pour 1 heure
-def analyze_with_openai(context_hex, context_ascii, obj_number=None):
-    """Analyse le contexte du DRM avec OpenAI avec cache"""
+@st.cache_data(ttl=3600)
+def analyze_drm_with_openai(context_hex, context_ascii, obj_number):
+    """Analyse le contexte DRM avec OpenAI pour obtenir des instructions précises de modification"""
     try:
         client = get_openai_client()
         if not client:
-            st.warning("OpenAI API non disponible - utilisation du mode standard")
             return None
 
-        # Formatage du prompt
-        prompt = f"""Analyze this PDF DRM context from object {obj_number} and provide modification instructions:
+        prompt = f"""Analiz ce contexte PDF qui contient une protection DRM FileOpen et fournis des instructions précises pour sa suppression.
 
-HEX context: {context_hex[:300]}
-ASCII context: {context_ascii[:300]}
+Contexte:
+Objet PDF: {obj_number}
+HEX: {context_hex[:300]}
+ASCII: {context_ascii[:300]}
 
-Find these elements in the context:
-1. The exact position of '/FOPN_foweb'
-2. The '/V 1' attribute position and value
-3. The stream beginning (after /INFO) and 'endstream' marker
-4. Any other DRM-related attributes
+Analyse nécessaire:
+1. Localise les éléments clés:
+   - Position exacte de '/FOPN_foweb'
+   - Position de '/V 1'
+   - Début et fin du stream chiffré (après /INFO jusqu'à endstream)
+   - Autres attributs de DRM importants
 
-Provide a JSON response with:
-1. Positions and lengths of blocks to modify
-2. Recommended replacement values
-3. Stream boundaries
-4. Any warnings or special handling needed"""
+2. Définis les modifications à appliquer:
+   - Quels blocs doivent être modifiés
+   - Valeurs de remplacement exactes
+   - Taille des blocs à remplacer
 
-        messages = [
-            {
-                "role": "system",
-                "content": "You are a PDF security expert. Analyze DRM structures and provide precise modification instructions in JSON format only."
-            },
-            {
-                "role": "user",
-                "content": prompt
-            }
-        ]
+Fournis la réponse au format JSON suivant:
+{
+    "modifications": [
+        {
+            "type": "filter",
+            "position": position_relative,
+            "longueur": nombre_octets,
+            "valeur": "nouvelle_valeur"
+        }
+    ],
+    "stream": {
+        "debut": position_relative_debut,
+        "fin": position_relative_fin,
+        "effacement_necessaire": true/false
+    },
+    "warnings": ["avertissements importants"],
+    "attributs_supplementaires": {
+        "nom_attribut": "valeur"
+    }
+}"""
 
         response = client.chat.completions.create(
             model="gpt-4",
-            messages=messages,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Tu es un expert en analyse de PDF et DRM. Analyse les structures DRM et fournis des instructions de modification précises uniquement au format JSON."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
             response_format={ "type": "json_object" },
             temperature=0
         )
         
-        analysis = response.choices[0].message.content
         try:
-            return json.loads(analysis)
+            return json.loads(response.choices[0].message.content)
         except json.JSONDecodeError:
-            logger.error("Réponse OpenAI non valide JSON")
+            logger.error("Réponse OpenAI non valide")
             return None
-        
+            
     except Exception as e:
-        logger.error(f"Erreur OpenAI: {str(e)}")
-        return None
-
-def extract_object_number(context):
-    """Extrait le numéro d'objet PDF du contexte"""
-    try:
-        obj_match = re.search(r'(\d+)\s+0\s+obj', context)
-        if obj_match:
-            return obj_match.group(1)
-        return None
-    except Exception:
+        logger.error(f"Erreur analyse OpenAI: {str(e)}")
         return None
 
 def process_drm_with_ai(buffer, positions):
+    """Traite le DRM en utilisant l'analyse OpenAI"""
     processed = bytearray(buffer)
     modifications_log = []
     
     for fopn_pos in positions:
         try:
-            # Extraire le contexte avec une marge plus large
+            # Extrait le contexte
             start_pos = max(0, fopn_pos - 200)
             end_pos = min(len(buffer), fopn_pos + 2000)
             context = buffer[start_pos:end_pos]
             
-            # Préparer les données pour l'analyse
+            # Prépare les données
             hex_dump = ' '.join([f"{b:02x}" for b in context])
             ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in context])
-            
-            # Extraire le numéro d'objet pour le contexte
             obj_number = extract_object_number(ascii_dump)
-            logger.debug(f"Analyse de l'objet {obj_number} à la position {fopn_pos}")
             
-            # Obtenir l'analyse d'OpenAI
-            analysis = analyze_with_openai(hex_dump, ascii_dump, obj_number)
+            # Obtient l'analyse d'OpenAI
+            analysis = analyze_drm_with_openai(hex_dump, ascii_dump, obj_number)
             
             if analysis:
-                st.write("📊 Analyse OpenAI :")
+                st.write("📊 Analyse DRM OpenAI:")
                 st.json(analysis)
                 
-                # Appliquer les modifications suggérées
+                # Applique les modifications
                 for mod in analysis.get('modifications', []):
                     try:
-                        abs_start = fopn_pos + (mod.get('start', 0) - 200)
-                        length = mod.get('length', 0)
-                        replace_with = mod.get('replace_with', '').encode('ascii')
+                        pos = fopn_pos + mod.get('position', 0)
+                        length = mod.get('longueur', 0)
+                        new_value = mod.get('valeur', '').encode('ascii')
                         
-                        if 0 <= abs_start < len(processed) and length > 0:
+                        if 0 <= pos < len(processed) and length > 0:
                             modifications_log.append({
-                                'position': abs_start,
+                                'position': pos,
                                 'type': mod.get('type'),
-                                'original': processed[abs_start:abs_start+length].hex(),
-                                'replacement': replace_with.hex()
+                                'original': processed[pos:pos+length].hex(),
+                                'new': new_value.hex()
                             })
-                            processed[abs_start:abs_start+length] = replace_with.ljust(length, b'\x00')
-                            logger.info(f"Modification appliquée: {mod['type']} à {abs_start}")
-                    except Exception as e:
-                        logger.error(f"Erreur modification {mod.get('type')}: {str(e)}")
-
-                # Traiter le stream si détecté
-                stream_info = analysis.get('stream', {})
-                if stream_info:
-                    try:
-                        stream_start = fopn_pos + (stream_info.get('start', 0) - 200)
-                        stream_end = fopn_pos + (stream_info.get('end', 0) - 200)
-                        
-                        if 0 <= stream_start < stream_end < len(processed):
-                            if stream_info.get('requires_zero_fill', True):
-                                processed[stream_start:stream_end] = b'\x00' * (stream_end - stream_start)
-                                logger.info(f"Stream effacé: {stream_start}-{stream_end}")
-                    except Exception as e:
-                        logger.error(f"Erreur traitement stream: {str(e)}")
+                            processed[pos:pos+length] = new_value.ljust(length, b'\x00')
+                            logger.info(f"Modification appliquée: {mod['type']} à {pos}")
                 
-                # Afficher les avertissements
+                # Traite le stream
+                stream = analysis.get('stream', {})
+                if stream:
+                    start = fopn_pos + stream.get('debut', 0)
+                    end = fopn_pos + stream.get('fin', 0)
+                    
+                    if 0 <= start < end < len(processed):
+                        if stream.get('effacement_necessaire', True):
+                            processed[start:end] = b'\x00' * (end - start)
+                            logger.info(f"Stream effacé: {start}-{end}")
+                
+                # Affiche les avertissements
                 for warning in analysis.get('warnings', []):
                     st.warning(f"⚠️ {warning}")
-                    
+            
             else:
-                # Fallback au traitement standard
-                logger.warning("Utilisation du traitement standard (OpenAI non disponible)")
+                # Mode standard si OpenAI échoue
+                st.warning("Mode standard activé (OpenAI indisponible)")
+                logger.warning("Utilisation du mode standard")
                 processed[fopn_pos:fopn_pos+18] = b'/Filter/FlateDecode'
                 
                 v_pos = buffer[fopn_pos:end_pos].find(b'/V 1')
                 if v_pos != -1:
-                    abs_v_pos = fopn_pos + v_pos + 3
-                    processed[abs_v_pos] = ord('0')
-                
+                    v_abs = fopn_pos + v_pos + 3
+                    processed[v_abs] = ord('0')
+                    
                 info_pos = buffer[fopn_pos:end_pos].find(b'/INFO(')
                 if info_pos != -1:
                     stream_start = fopn_pos + info_pos
@@ -175,18 +173,12 @@ def process_drm_with_ai(buffer, positions):
                     if stream_end != -1:
                         abs_stream_end = stream_start + stream_end
                         processed[stream_start:abs_stream_end] = b'\x00' * (abs_stream_end - stream_start)
-            
+        
         except Exception as e:
-            logger.error(f"Erreur traitement position {fopn_pos}: {str(e)}")
+            logger.error(f"Erreur position {fopn_pos}: {str(e)}")
             logger.error(traceback.format_exc())
             st.error(f"⚠️ Erreur position {fopn_pos}: {str(e)}")
             continue
-    
-    # Log des modifications
-    if modifications_log:
-        st.write("📝 Journal des modifications :")
-        for mod in modifications_log:
-            st.code(f"Position {mod['position']} ({mod['type']}): {mod['original']} -> {mod['replacement']}")
     
     return bytes(processed)
 
