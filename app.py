@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 @st.cache_resource
 def get_openai_client():
     try:
-        client = OpenAI(api_key=st.secrets["openai_api_key"])
+        client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
         return client
     except Exception as e:
         logger.error(f"Erreur d'initialisation OpenAI: {str(e)}")
