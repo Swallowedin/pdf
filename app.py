@@ -15,7 +15,6 @@ logging.basicConfig(level=logging.DEBUG,
                    format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialisation de l'API OpenAI
 @st.cache_resource
 def get_openai_client():
     try:
@@ -27,13 +26,12 @@ def get_openai_client():
 
 @st.cache_data(ttl=3600)
 def analyze_drm_with_openai(context_hex, context_ascii, obj_number):
-    """Analyse le contexte DRM avec OpenAI pour obtenir des instructions précises de modification"""
     try:
         client = get_openai_client()
         if not client:
             return None
 
-        prompt = f"""Analiz ce contexte PDF qui contient une protection DRM FileOpen et fournis des instructions précises pour sa suppression.
+        prompt = f"""Analyse ce contexte PDF qui contient une protection DRM FileOpen et fournis des instructions précises pour sa suppression.
 
 Contexte:
 Objet PDF: {obj_number}
@@ -50,28 +48,7 @@ Analyse nécessaire:
 2. Définis les modifications à appliquer:
    - Quels blocs doivent être modifiés
    - Valeurs de remplacement exactes
-   - Taille des blocs à remplacer
-
-Fournis la réponse au format JSON suivant:
-{
-    "modifications": [
-        {
-            "type": "filter",
-            "position": position_relative,
-            "longueur": nombre_octets,
-            "valeur": "nouvelle_valeur"
-        }
-    ],
-    "stream": {
-        "debut": position_relative_debut,
-        "fin": position_relative_fin,
-        "effacement_necessaire": true/false
-    },
-    "warnings": ["avertissements importants"],
-    "attributs_supplementaires": {
-        "nom_attribut": "valeur"
-    }
-}"""
+   - Taille des blocs à remplacer"""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -100,7 +77,6 @@ Fournis la réponse au format JSON suivant:
         return None
 
 def process_drm_with_ai(buffer, positions):
-    """Traite le DRM en utilisant l'analyse OpenAI"""
     processed = bytearray(buffer)
     modifications_log = []
     
@@ -123,9 +99,9 @@ def process_drm_with_ai(buffer, positions):
                 st.write("📊 Analyse DRM OpenAI:")
                 st.json(analysis)
                 
-                # Applique les modifications
-                for mod in analysis.get('modifications', []):
-                    try:
+                try:
+                    # Applique les modifications
+                    for mod in analysis.get('modifications', []):
                         pos = fopn_pos + mod.get('position', 0)
                         length = mod.get('longueur', 0)
                         new_value = mod.get('valeur', '').encode('ascii')
@@ -139,40 +115,47 @@ def process_drm_with_ai(buffer, positions):
                             })
                             processed[pos:pos+length] = new_value.ljust(length, b'\x00')
                             logger.info(f"Modification appliquée: {mod['type']} à {pos}")
-                
-                # Traite le stream
-                stream = analysis.get('stream', {})
-                if stream:
-                    start = fopn_pos + stream.get('debut', 0)
-                    end = fopn_pos + stream.get('fin', 0)
-                    
-                    if 0 <= start < end < len(processed):
-                        if stream.get('effacement_necessaire', True):
-                            processed[start:end] = b'\x00' * (end - start)
-                            logger.info(f"Stream effacé: {start}-{end}")
-                
-                # Affiche les avertissements
-                for warning in analysis.get('warnings', []):
-                    st.warning(f"⚠️ {warning}")
+
+                    # Traite le stream
+                    stream = analysis.get('stream', {})
+                    if stream:
+                        start = fopn_pos + stream.get('debut', 0)
+                        end = fopn_pos + stream.get('fin', 0)
+                        
+                        if 0 <= start < end < len(processed):
+                            if stream.get('effacement_necessaire', True):
+                                processed[start:end] = b'\x00' * (end - start)
+                                logger.info(f"Stream effacé: {start}-{end}")
+
+                    # Affiche les avertissements
+                    for warning in analysis.get('warnings', []):
+                        st.warning(f"⚠️ {warning}")
+                except Exception as e:
+                    logger.error(f"Erreur application modifications: {str(e)}")
+                    st.error(f"Erreur modifications: {str(e)}")
             
             else:
                 # Mode standard si OpenAI échoue
                 st.warning("Mode standard activé (OpenAI indisponible)")
                 logger.warning("Utilisation du mode standard")
-                processed[fopn_pos:fopn_pos+18] = b'/Filter/FlateDecode'
-                
-                v_pos = buffer[fopn_pos:end_pos].find(b'/V 1')
-                if v_pos != -1:
-                    v_abs = fopn_pos + v_pos + 3
-                    processed[v_abs] = ord('0')
+                try:
+                    processed[fopn_pos:fopn_pos+18] = b'/Filter/FlateDecode'
                     
-                info_pos = buffer[fopn_pos:end_pos].find(b'/INFO(')
-                if info_pos != -1:
-                    stream_start = fopn_pos + info_pos
-                    stream_end = buffer[stream_start:end_pos].find(b'endstream')
-                    if stream_end != -1:
-                        abs_stream_end = stream_start + stream_end
-                        processed[stream_start:abs_stream_end] = b'\x00' * (abs_stream_end - stream_start)
+                    v_pos = buffer[fopn_pos:end_pos].find(b'/V 1')
+                    if v_pos != -1:
+                        v_abs = fopn_pos + v_pos + 3
+                        processed[v_abs] = ord('0')
+                        
+                    info_pos = buffer[fopn_pos:end_pos].find(b'/INFO(')
+                    if info_pos != -1:
+                        stream_start = fopn_pos + info_pos
+                        stream_end = buffer[stream_start:end_pos].find(b'endstream')
+                        if stream_end != -1:
+                            abs_stream_end = stream_start + stream_end
+                            processed[stream_start:abs_stream_end] = b'\x00' * (abs_stream_end - stream_start)
+                except Exception as e:
+                    logger.error(f"Erreur mode standard: {str(e)}")
+                    st.error(f"Erreur mode standard: {str(e)}")
         
         except Exception as e:
             logger.error(f"Erreur position {fopn_pos}: {str(e)}")
@@ -182,7 +165,18 @@ def process_drm_with_ai(buffer, positions):
     
     return bytes(processed)
 
+def extract_object_number(context):
+    """Extrait le numéro d'objet PDF du contexte"""
+    try:
+        obj_match = re.search(r'(\d+)\s+0\s+obj', context)
+        if obj_match:
+            return obj_match.group(1)
+        return None
+    except Exception:
+        return None
+
 def find_all_occurrences(text, pattern):
+    """Trouve toutes les occurrences d'un pattern dans le texte"""
     pos = 0
     occurrences = []
     while True:
@@ -195,6 +189,7 @@ def find_all_occurrences(text, pattern):
     return occurrences
 
 def extract_text_from_pdf(buffer):
+    """Extrait le texte du PDF"""
     try:
         pdf_reader = PyPDF2.PdfReader(io.BytesIO(buffer), strict=False)
         text = []
@@ -248,7 +243,7 @@ def analyze_pdf(file_bytes):
 
 def main():
     st.set_page_config(page_title="DRM FileOpen", layout="wide")
-    st.title("🔓 DRM FileOpen")
+    st.title("🔓 DRM FileOpen Analyzer")
     
     # Vérification de la configuration OpenAI
     client = get_openai_client()
@@ -257,7 +252,6 @@ def main():
     else:
         st.success("✅ API OpenAI connectée")
     
-    # Interface utilisateur
     files = st.file_uploader("PDF à traiter", type=['pdf'], accept_multiple_files=True)
     
     if files:
