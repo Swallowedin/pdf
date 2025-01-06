@@ -25,7 +25,7 @@ def get_openai_client():
         return None
 
 @st.cache_data(ttl=3600)
-def analyze_drm_with_openai(context_hex, context_ascii, obj_number):
+def analyze_drm_with_openai(context_hex, context_ascii, obj_number, fopn_pos=None):
     try:
         client = get_openai_client()
         if not client:
@@ -35,6 +35,7 @@ def analyze_drm_with_openai(context_hex, context_ascii, obj_number):
 
 Contexte actuel:
 Objet PDF: {obj_number}
+Position FOPN: {fopn_pos}
 HEX: {context_hex[:300]}
 ASCII: {context_ascii[:300]}
 
@@ -99,6 +100,7 @@ IMPORTANT: Les positions doivent être calculées en analysant le HEX et ASCII f
     except Exception as e:
         logger.error(f"Erreur analyse OpenAI: {str(e)}")
         return None
+
 def process_drm_with_ai(buffer, positions):
     processed = bytearray(buffer)
     modifications_log = []
@@ -263,6 +265,105 @@ def analyze_pdf(file_bytes):
     
     return file_info, processed, text
 
+def collect_training_data(files_data):
+    """Collecte les données pour le fine-tuning à partir de plusieurs fichiers"""
+    training_examples = []
+    for filename, (hex_dump, ascii_dump, fopn_pos, result) in files_data.items():
+        example = {
+            "context_hex": hex_dump,
+            "context_ascii": ascii_dump,
+            "fopn_position": fopn_pos,
+            "analysis_result": result
+        }
+        training_examples.append(example)
+    return training_examples
+
+def compare_drm_structures(files_data):
+    """Compare les structures DRM entre les fichiers"""
+    comparisons = {
+        "positions_relatives": {},
+        "tailles_stream": {},
+        "patterns_communs": set()
+    }
+    
+    for filename, (hex_dump, ascii_dump, fopn_pos, result) in files_data.items():
+        if result:
+            # Analyser les positions relatives des éléments
+            for mod in result.get('modifications', []):
+                element = mod.get('type')
+                pos = mod.get('position')
+                if element:
+                    if element not in comparisons["positions_relatives"]:
+                        comparisons["positions_relatives"][element] = []
+                    comparisons["positions_relatives"][element].append(pos)
+            
+            # Analyser les tailles de stream
+            stream = result.get('stream', {})
+            if stream:
+                taille = stream.get('fin', 0) - stream.get('debut', 0)
+                comparisons["tailles_stream"][filename] = taille
+    
+    return comparisons
+
+def show_batch_analysis(files):
+    """Interface pour l'analyse par lot"""
+    if st.button("🔄 Analyser tous les fichiers"):
+        files_data = {}
+        
+        with st.spinner("Analyse comparative en cours..."):
+            for file in files:
+                bytes_data = file.getvalue()
+                fopn_pos = find_first_fopn(bytes_data)
+                if fopn_pos:
+                    # Extraire le contexte
+                    start_pos = max(0, fopn_pos - 200)
+                    end_pos = min(len(bytes_data), fopn_pos + 2000)
+                    context = bytes_data[start_pos:end_pos]
+                    
+                    hex_dump = ' '.join([f"{b:02x}" for b in context])
+                    ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in context])
+                    
+                    # Analyser avec OpenAI
+                    analysis = analyze_drm_with_openai(hex_dump, ascii_dump, extract_object_number(ascii_dump), fopn_pos)
+                    files_data[file.name] = (hex_dump, ascii_dump, fopn_pos, analysis)
+
+        # Afficher l'analyse comparative
+        if files_data:
+            st.write("### 📊 Analyse comparative des DRM")
+            
+            comparisons = compare_drm_structures(files_data)
+            
+            # Afficher les positions relatives
+            st.write("#### Positions relatives des éléments")
+            for element, positions in comparisons["positions_relatives"].items():
+                st.write(f"**{element}:**")
+                st.write(f"- Min: {min(positions)}")
+                st.write(f"- Max: {max(positions)}")
+                st.write(f"- Moyenne: {sum(positions)/len(positions):.2f}")
+            
+            # Afficher les tailles de stream
+            st.write("#### Tailles des streams")
+            for filename, taille in comparisons["tailles_stream"].items():
+                st.write(f"**{filename}:** {taille} octets")
+            
+            # Générer les données d'entraînement
+            training_data = collect_training_data(files_data)
+            
+            # Bouton pour télécharger les données d'entraînement
+            if training_data:
+                st.download_button(
+                    "📥 Télécharger les données d'entraînement",
+                    data=json.dumps(training_data, indent=2),
+                    file_name="training_data.json",
+                    mime="application/json"
+                )
+                
+def find_first_fopn(buffer):
+    """Trouve la première occurrence de FOPN_foweb"""
+    content = buffer.decode('latin-1', errors='ignore')
+    pos = content.find('/FOPN_foweb')
+    return pos if pos != -1 else None
+
 def main():
     st.set_page_config(page_title="DRM FileOpen", layout="wide")
     st.title("🔓 DRM FileOpen Analyzer")
@@ -275,6 +376,10 @@ def main():
         st.success("✅ API OpenAI connectée")
     
     files = st.file_uploader("PDF à traiter", type=['pdf'], accept_multiple_files=True)
+    
+    if len(files) > 1:
+        st.write("### 🔍 Analyse comparative disponible")
+        show_batch_analysis(files)
     
     if files:
         for file in files:
