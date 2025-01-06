@@ -307,11 +307,15 @@ def compare_drm_structures(files_data):
 
 def show_batch_analysis(files):
     """Interface pour l'analyse par lot"""
+    results_container = st.empty()
+    
     if st.button("🔄 Analyser tous les fichiers"):
+        progress_bar = st.progress(0)
+        results = []
         files_data = {}
         
         with st.spinner("Analyse comparative en cours..."):
-            for file in files:
+            for idx, file in enumerate(files):
                 bytes_data = file.getvalue()
                 fopn_pos = find_first_fopn(bytes_data)
                 if fopn_pos:
@@ -323,28 +327,60 @@ def show_batch_analysis(files):
                     hex_dump = ' '.join([f"{b:02x}" for b in context])
                     ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in context])
                     
-                    # Analyser avec OpenAI
+                    # Analyser avec OpenAI en précisant que les positions doivent être relatives
                     analysis = analyze_drm_with_openai(hex_dump, ascii_dump, extract_object_number(ascii_dump), fopn_pos)
                     files_data[file.name] = (hex_dump, ascii_dump, fopn_pos, analysis)
+                
+                progress_bar.progress((idx + 1) / len(files))
+                results.append((file.name, fopn_pos, analysis))
 
         # Afficher l'analyse comparative
-        if files_data:
+        with results_container:
             st.write("### 📊 Analyse comparative des DRM")
             
-            comparisons = compare_drm_structures(files_data)
+            # Tableau comparatif
+            st.write("#### 📈 Comparaison des positions")
+            data = []
+            for name, fopn_pos, analysis in results:
+                if analysis:
+                    filter_pos = next((m for m in analysis.get('modifications', []) 
+                                     if m.get('type') == 'filter'), {}).get('position', 'N/A')
+                    version_pos = next((m for m in analysis.get('modifications', []) 
+                                      if m.get('type') == 'version'), {}).get('position', 'N/A')
+                    stream_size = (analysis.get('stream', {}).get('fin', 0) - 
+                                 analysis.get('stream', {}).get('debut', 0))
+                    
+                    data.append({
+                        "Fichier": name,
+                        "Position FOPN": fopn_pos,
+                        "Offset filtre": filter_pos,
+                        "Offset version": version_pos,
+                        "Taille stream": stream_size
+                    })
             
-            # Afficher les positions relatives
-            st.write("#### Positions relatives des éléments")
-            for element, positions in comparisons["positions_relatives"].items():
-                st.write(f"**{element}:**")
-                st.write(f"- Min: {min(positions)}")
-                st.write(f"- Max: {max(positions)}")
-                st.write(f"- Moyenne: {sum(positions)/len(positions):.2f}")
-            
-            # Afficher les tailles de stream
-            st.write("#### Tailles des streams")
-            for filename, taille in comparisons["tailles_stream"].items():
-                st.write(f"**{filename}:** {taille} octets")
+            if data:
+                st.dataframe(data)
+                
+                # Statistiques
+                st.write("#### 📊 Statistiques")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Positions relatives moyennes:**")
+                    offsets = [d["Offset filtre"] for d in data if d["Offset filtre"] != 'N/A']
+                    if offsets:
+                        st.write(f"- Filtre: {sum(offsets)/len(offsets):.2f}")
+                    
+                    offsets = [d["Offset version"] for d in data if d["Offset version"] != 'N/A']
+                    if offsets:
+                        st.write(f"- Version: {sum(offsets)/len(offsets):.2f}")
+                
+                with col2:
+                    st.write("**Tailles des streams:**")
+                    sizes = [d["Taille stream"] for d in data]
+                    if sizes:
+                        st.write(f"- Min: {min(sizes)}")
+                        st.write(f"- Max: {max(sizes)}")
+                        st.write(f"- Moyenne: {sum(sizes)/len(sizes):.2f}")
             
             # Générer les données d'entraînement
             training_data = collect_training_data(files_data)
