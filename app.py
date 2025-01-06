@@ -38,24 +38,38 @@ Objet PDF: {obj_number}
 HEX: {context_hex[:300]}
 ASCII: {context_ascii[:300]}
 
-Analyse nécessaire:
-1. Localise les éléments clés:
-   - Position exacte de '/FOPN_foweb'
-   - Position de '/V 1'
-   - Début et fin du stream chiffré (après /INFO jusqu'à endstream)
-   - Autres attributs de DRM importants
+Ta réponse doit être un JSON strict avec exactement cette structure :
+{{
+    "modifications": [
+        {{
+            "type": "filter",
+            "position": 0,
+            "longueur": 18,
+            "valeur": "/Filter/FlateDecode"
+        }}
+    ],
+    "stream": {{
+        "debut": 100,
+        "fin": 200,
+        "effacement_necessaire": true
+    }},
+    "warnings": [
+        "message d'avertissement"
+    ]
+}}
 
-2. Définis les modifications à appliquer:
-   - Quels blocs doivent être modifiés
-   - Valeurs de remplacement exactes
-   - Taille des blocs à remplacer"""
+Analyse les positions dans le contexte fourni et retourne les positions exactes pour:
+1. Position et longueur pour remplacer FOPN_foweb par FlateDecode
+2. Position et longueur pour changer V 1 en V 0
+3. Position du début et fin du stream à effacer
+4. Tout avertissement pertinent sur la structure"""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": "Tu es un expert en analyse de PDF et DRM. Analyse les structures DRM et fournis des instructions de modification précises uniquement au format JSON."
+                    "content": "Tu es un expert en analyse de PDF et DRM. Retourne UNIQUEMENT un JSON valide avec la structure exacte demandée."
                 },
                 {
                     "role": "user",
@@ -68,8 +82,9 @@ Analyse nécessaire:
         
         try:
             return json.loads(response.choices[0].message.content)
-        except json.JSONDecodeError:
-            logger.error("Réponse OpenAI non valide")
+        except json.JSONDecodeError as e:
+            logger.error(f"Réponse OpenAI non valide: {e}")
+            logger.error(f"Contenu reçu: {response.choices[0].message.content}")
             return None
             
     except Exception as e:
