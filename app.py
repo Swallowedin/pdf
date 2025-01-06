@@ -115,8 +115,8 @@ def process_drm_with_ai(buffer, positions):
             ascii_dump = ''.join([chr(b) if 32 <= b <= 126 else '.' for b in context])
             obj_number = extract_object_number(ascii_dump)
             
-            # Obtient l'analyse d'OpenAI
-            analysis = analyze_drm_with_openai(hex_dump, ascii_dump, obj_number)
+            # Obtient l'analyse d'OpenAI avec la position FOPN
+            analysis = analyze_drm_with_openai(hex_dump, ascii_dump, obj_number, fopn_pos)
             
             if analysis:
                 st.write("📊 Analyse DRM OpenAI:")
@@ -125,30 +125,29 @@ def process_drm_with_ai(buffer, positions):
                 try:
                     # Applique les modifications
                     for mod in analysis.get('modifications', []):
-                        pos = fopn_pos + mod.get('position', 0)
+                        abs_pos = fopn_pos + mod.get('position', 0)
                         length = mod.get('longueur', 0)
                         new_value = mod.get('valeur', '').encode('ascii')
                         
-                        if 0 <= pos < len(processed) and length > 0:
+                        if 0 <= abs_pos < len(processed) and length > 0:
                             modifications_log.append({
-                                'position': pos,
+                                'position': abs_pos,
                                 'type': mod.get('type'),
-                                'original': processed[pos:pos+length].hex(),
+                                'original': processed[abs_pos:abs_pos+length].hex(),
                                 'new': new_value.hex()
                             })
-                            processed[pos:pos+length] = new_value.ljust(length, b'\x00')
-                            logger.info(f"Modification appliquée: {mod['type']} à {pos}")
+                            processed[abs_pos:abs_pos+length] = new_value.ljust(length, b'\x00')
+                            logger.info(f"Modification appliquée: {mod['type']} à {abs_pos}")
 
                     # Traite le stream
                     stream = analysis.get('stream', {})
-                    if stream:
-                        start = fopn_pos + stream.get('debut', 0)
-                        end = fopn_pos + stream.get('fin', 0)
+                    if stream and stream.get('effacement_necessaire'):
+                        abs_start = fopn_pos + stream.get('debut', 0)
+                        abs_end = fopn_pos + stream.get('fin', 0)
                         
-                        if 0 <= start < end < len(processed):
-                            if stream.get('effacement_necessaire', True):
-                                processed[start:end] = b'\x00' * (end - start)
-                                logger.info(f"Stream effacé: {start}-{end}")
+                        if 0 <= abs_start < abs_end < len(processed):
+                            processed[abs_start:abs_end] = b'\x00' * (abs_end - abs_start)
+                            logger.info(f"Stream effacé: {abs_start}-{abs_end}")
 
                     # Affiche les avertissements
                     for warning in analysis.get('warnings', []):
