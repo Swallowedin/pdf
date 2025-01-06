@@ -375,22 +375,52 @@ def main():
     else:
         st.success("✅ API OpenAI connectée")
     
-    files = st.file_uploader("PDF à traiter", type=['pdf'], accept_multiple_files=True)
+    # Upload des fichiers avec indications claires
+    st.markdown("### 📂 Sélection des fichiers")
+    files = st.file_uploader(
+        "PDF à traiter", 
+        type=['pdf'], 
+        accept_multiple_files=True,
+        help="Vous pouvez sélectionner plusieurs fichiers en maintenant CTRL (ou CMD sur Mac)"
+    )
     
+    if not files:
+        st.info("💡 Glissez-déposez un ou plusieurs fichiers PDF ici, ou cliquez pour les sélectionner")
+        return
+        
+    st.markdown(f"### 📊 {len(files)} fichier(s) à analyser")
+    
+    # Analyse comparative si plusieurs fichiers
     if len(files) > 1:
         st.write("### 🔍 Analyse comparative disponible")
-        show_batch_analysis(files)
+        col1, col2 = st.columns(2)
+        with col1:
+            do_batch = st.checkbox("Activer l'analyse comparative", value=True)
+        with col2:
+            if do_batch:
+                do_individual = st.checkbox("Garder l'analyse individuelle", value=True)
+                if do_individual:
+                    st.info("Les fichiers seront analysés individuellement après l'analyse comparative")
+                
+        if do_batch:
+            show_batch_analysis(files)
+            
+        if not do_individual:
+            return
     
-    if files:
-        for file in files:
-            try:
-                st.write(f"\n=== 📄 {file.name} ===")
-                bytes_data = file.getvalue()
-                
-                with st.spinner("Analyse en cours..."):
-                    info, processed, text = analyze_pdf(bytes_data)
-                
-                # Affichage des métriques
+    # Analyse individuelle des fichiers
+    for file in files:
+        try:
+            st.markdown(f"""---
+### 📄 Analyse de {file.name}""")
+            bytes_data = file.getvalue()
+            
+            with st.spinner("🔍 Analyse en cours..."):
+                info, processed, text = analyze_pdf(bytes_data)
+            
+            # Affichage des métriques dans un conteneur
+            with st.container():
+                st.markdown("#### 📊 Informations générales")
                 col1, col2, col3 = st.columns(3)
                 with col1:
                     st.metric("Protection", info.get('type', 'Aucune'))
@@ -402,33 +432,57 @@ def main():
                     st.metric("Version PDF", info.get('version', 'N/A'))
                     if info.get('protection_count'):
                         st.metric("Protections", info['protection_count'])
-                
-                # Résultats et boutons de téléchargement
-                if info['has_fileopen']:
-                    st.warning("🔓 Protection FileOpen détectée et déprotégée")
-                    
-                    if text:
-                        with st.expander("📝 Texte extrait"):
-                            st.text_area("Contenu", text, height=200)
-                        
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.download_button("📄 Texte", text,
-                                f"{file.name}_text.txt", "text/plain")
-                        with col2:
-                            st.download_button("📝 Fichier brut", bytes_data,
-                                f"{file.name}_raw.txt", "text/plain")
-                        with col3:
-                            st.download_button("🔓 PDF déprotégé", processed,
-                                f"{file.name}_unprotected.pdf", "application/pdf")
-                    else:
-                        st.error("❌ Extraction du texte impossible")
-                        st.download_button("🔓 PDF déprotégé", processed,
-                            f"{file.name}_unprotected.pdf", "application/pdf")
             
-            except Exception as e:
-                logger.error(traceback.format_exc())
-                st.error(f"❌ Erreur: {str(e)}")
+            # Résultats et boutons de téléchargement
+            if info['has_fileopen']:
+                st.warning("🔓 Protection FileOpen détectée et déprotégée")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    with st.expander("📝 Texte extrait", expanded=False):
+                        if text:
+                            st.text_area("Contenu", text, height=200)
+                        else:
+                            st.error("❌ Extraction du texte impossible")
+                            
+                with col2:
+                    with st.expander("💾 Téléchargements", expanded=True):
+                        st.markdown("#### 📥 Fichiers disponibles")
+                        dl_col1, dl_col2, dl_col3 = st.columns(3)
+                        with dl_col1:
+                            if text:
+                                st.download_button(
+                                    "📄 Texte extrait",
+                                    text,
+                                    file_name=f"{file.name}_text.txt",
+                                    mime="text/plain",
+                                    help="Télécharger le texte extrait du PDF"
+                                )
+                        with dl_col2:
+                            st.download_button(
+                                "📝 Fichier brut",
+                                bytes_data,
+                                file_name=f"{file.name}_raw.txt",
+                                mime="text/plain",
+                                help="Télécharger les données brutes du PDF"
+                            )
+                        with dl_col3:
+                            st.download_button(
+                                "🔓 PDF déprotégé",
+                                processed,
+                                file_name=f"{file.name}_unprotected.pdf",
+                                mime="application/pdf",
+                                help="Télécharger le PDF sans protection DRM"
+                            )
+            else:
+                st.success("✅ Aucune protection détectée")
+                
+        except Exception as e:
+            logger.error(traceback.format_exc())
+            st.error(f"❌ Erreur lors de l'analyse de {file.name}: {str(e)}")
+            continue
+        
+        st.markdown("---")
 
 if __name__ == "__main__":
     main()
