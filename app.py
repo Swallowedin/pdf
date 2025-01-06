@@ -1,6 +1,7 @@
 import streamlit as st
 import io
 import logging
+import re
 from pathlib import Path
 import PyPDF2
 from openai import OpenAI
@@ -37,7 +38,7 @@ def analyze_with_openai(context_hex, context_ascii, obj_number=None):
             st.warning("OpenAI API non disponible - utilisation du mode standard")
             return None
 
-        # Formatage du prompt avec les données de contexte et le numéro d'objet
+        # Formatage du prompt
         prompt = f"""Analyze this PDF DRM context from object {obj_number} and provide modification instructions:
 
 HEX context: {context_hex[:300]}
@@ -53,25 +54,7 @@ Provide a JSON response with:
 1. Positions and lengths of blocks to modify
 2. Recommended replacement values
 3. Stream boundaries
-4. Any warnings or special handling needed
-
-Format your response as valid JSON like this example:
-{
-    "modifications": [
-        {
-            "type": "filter",
-            "start": 123,
-            "length": 18,
-            "replace_with": "/Filter/FlateDecode"
-        }
-    ],
-    "stream": {
-        "start": 456,
-        "end": 789,
-        "requires_zero_fill": true
-    },
-    "warnings": ["Check endstream marker at..."]
-}"""
+4. Any warnings or special handling needed"""
 
         messages = [
             {
@@ -85,7 +68,7 @@ Format your response as valid JSON like this example:
         ]
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4",
             messages=messages,
             response_format={ "type": "json_object" },
             temperature=0
@@ -93,7 +76,6 @@ Format your response as valid JSON like this example:
         
         analysis = response.choices[0].message.content
         try:
-            # Valider que c'est du JSON valide
             return json.loads(analysis)
         except json.JSONDecodeError:
             logger.error("Réponse OpenAI non valide JSON")
@@ -130,10 +112,7 @@ def process_drm_with_ai(buffer, positions):
             
             # Extraire le numéro d'objet pour le contexte
             obj_number = extract_object_number(ascii_dump)
-            
-            # Log du contexte
             logger.debug(f"Analyse de l'objet {obj_number} à la position {fopn_pos}")
-            logger.debug(f"Contexte HEX: {hex_dump[:100]}...")
             
             # Obtenir l'analyse d'OpenAI
             analysis = analyze_with_openai(hex_dump, ascii_dump, obj_number)
@@ -145,7 +124,7 @@ def process_drm_with_ai(buffer, positions):
                 # Appliquer les modifications suggérées
                 for mod in analysis.get('modifications', []):
                     try:
-                        abs_start = fopn_pos + (mod.get('start', 0) - 200)  # Ajuster avec l'offset du contexte
+                        abs_start = fopn_pos + (mod.get('start', 0) - 200)
                         length = mod.get('length', 0)
                         replace_with = mod.get('replace_with', '').encode('ascii')
                         
@@ -158,24 +137,29 @@ def process_drm_with_ai(buffer, positions):
                             })
                             processed[abs_start:abs_start+length] = replace_with.ljust(length, b'\x00')
                             logger.info(f"Modification appliquée: {mod['type']} à {abs_start}")
-                
+                    except Exception as e:
+                        logger.error(f"Erreur modification {mod.get('type')}: {str(e)}")
+
                 # Traiter le stream si détecté
                 stream_info = analysis.get('stream', {})
                 if stream_info:
-                    stream_start = fopn_pos + (stream_info.get('start', 0) - 200)
-                    stream_end = fopn_pos + (stream_info.get('end', 0) - 200)
-                    
-                    if 0 <= stream_start < stream_end < len(processed):
-                        if stream_info.get('requires_zero_fill', True):
-                            processed[stream_start:stream_end] = b'\x00' * (stream_end - stream_start)
-                            logger.info(f"Stream effacé: {stream_start}-{stream_end}")
+                    try:
+                        stream_start = fopn_pos + (stream_info.get('start', 0) - 200)
+                        stream_end = fopn_pos + (stream_info.get('end', 0) - 200)
+                        
+                        if 0 <= stream_start < stream_end < len(processed):
+                            if stream_info.get('requires_zero_fill', True):
+                                processed[stream_start:stream_end] = b'\x00' * (stream_end - stream_start)
+                                logger.info(f"Stream effacé: {stream_start}-{stream_end}")
+                    except Exception as e:
+                        logger.error(f"Erreur traitement stream: {str(e)}")
                 
                 # Afficher les avertissements
                 for warning in analysis.get('warnings', []):
                     st.warning(f"⚠️ {warning}")
                     
             else:
-                # Fallback au traitement standard si OpenAI échoue
+                # Fallback au traitement standard
                 logger.warning("Utilisation du traitement standard (OpenAI non disponible)")
                 processed[fopn_pos:fopn_pos+18] = b'/Filter/FlateDecode'
                 
@@ -205,6 +189,34 @@ def process_drm_with_ai(buffer, positions):
             st.code(f"Position {mod['position']} ({mod['type']}): {mod['original']} -> {mod['replacement']}")
     
     return bytes(processed)
+
+def find_all_occurrences(text, pattern):
+    pos = 0
+    occurrences = []
+    while True:
+        pos = text.find(pattern, pos)
+        if pos == -1:
+            break
+        occurrences.append(pos)
+        pos += 1
+    logger.info(f"Trouvé {len(occurrences)} occurrences de {pattern}")
+    return occurrences
+
+def extract_text_from_pdf(buffer):
+    try:
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(buffer), strict=False)
+        text = []
+        for i, page in enumerate(pdf_reader.pages):
+            try:
+                text.append(f"=== Page {i+1} ===\n{page.extract_text()}")
+                logger.info(f"Page {i+1} extraite avec succès")
+            except Exception as e:
+                logger.error(f"Erreur extraction page {i+1}: {str(e)}")
+                text.append(f"=== Page {i+1} ===\n[Erreur extraction]")
+        return '\n\n'.join(text)
+    except Exception as e:
+        logger.error(f"Erreur extraction globale: {str(e)}")
+        return None
 
 def analyze_pdf(file_bytes):
     """Analyse principale du PDF avec support OpenAI"""
@@ -286,7 +298,7 @@ def main():
                         with st.expander("📝 Texte extrait"):
                             st.text_area("Contenu", text, height=200)
                         
-                        col1, col2, col3, col4 = st.columns(4)
+                        col1, col2, col3 = st.columns(3)
                         with col1:
                             st.download_button("📄 Texte", text,
                                 f"{file.name}_text.txt", "text/plain")
@@ -296,11 +308,6 @@ def main():
                         with col3:
                             st.download_button("🔓 PDF déprotégé", processed,
                                 f"{file.name}_unprotected.pdf", "application/pdf")
-                        with col4:
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            log_content = json.dumps(modifications_log, indent=2)
-                            st.download_button("📊 Journal", log_content,
-                                f"{file.name}_log_{timestamp}.json", "application/json")
                     else:
                         st.error("❌ Extraction du texte impossible")
                         st.download_button("🔓 PDF déprotégé", processed,
