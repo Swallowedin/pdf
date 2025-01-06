@@ -31,45 +31,52 @@ def analyze_drm_with_openai(context_hex, context_ascii, obj_number):
         if not client:
             return None
 
-        prompt = f"""Analyse ce contexte PDF qui contient une protection DRM FileOpen et fournis des instructions précises pour sa suppression.
+        prompt = f"""Analyse ce contexte PDF spécifique qui contient une protection DRM FileOpen. Trouve les positions EXACTES dans le contexte fourni.
 
-Contexte:
+Contexte actuel:
 Objet PDF: {obj_number}
 HEX: {context_hex[:300]}
 ASCII: {context_ascii[:300]}
 
-Ta réponse doit être un JSON strict avec exactement cette structure :
+IMPORTANT: Analyse le contexte fourni pour trouver les positions RÉELLES :
+1. Cherche '/FOPN_foweb' dans le contexte et donne sa position relative
+2. Trouve '/V 1' en partant de la position FOPN et donne son offset
+3. Localise '/INFO(' et 'endstream' pour les limites du stream
+
+Retourne un JSON avec cette structure:
 {{
     "modifications": [
         {{
             "type": "filter",
-            "position": 0,
-            "longueur": 18,
+            "position": <position_relative_de_FOPN>,
+            "longueur": <longueur_reelle>,
             "valeur": "/Filter/FlateDecode"
+        }},
+        {{
+            "type": "version",
+            "position": <position_relative_de_V1>,
+            "longueur": 1,
+            "valeur": "0"
         }}
     ],
     "stream": {{
-        "debut": 100,
-        "fin": 200,
+        "debut": <position_relative_INFO>,
+        "fin": <position_relative_endstream>,
         "effacement_necessaire": true
     }},
     "warnings": [
-        "message d'avertissement"
+        "messages d'avertissement"
     ]
 }}
 
-Analyse les positions dans le contexte fourni et retourne les positions exactes pour:
-1. Position et longueur pour remplacer FOPN_foweb par FlateDecode
-2. Position et longueur pour changer V 1 en V 0
-3. Position du début et fin du stream à effacer
-4. Tout avertissement pertinent sur la structure"""
+IMPORTANT: Les positions doivent être calculées en analysant le HEX et ASCII fournis."""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
-                    "content": "Tu es un expert en analyse de PDF et DRM. Retourne UNIQUEMENT un JSON valide avec la structure exacte demandée."
+                    "content": "Tu es un expert en analyse hexadécimale et PDF. Analyse le contexte RÉEL fourni pour trouver les positions EXACTES."
                 },
                 {
                     "role": "user",
@@ -81,7 +88,9 @@ Analyse les positions dans le contexte fourni et retourne les positions exactes 
         )
         
         try:
-            return json.loads(response.choices[0].message.content)
+            analysis = json.loads(response.choices[0].message.content)
+            logger.debug(f"Positions trouvées: {json.dumps(analysis, indent=2)}")
+            return analysis
         except json.JSONDecodeError as e:
             logger.error(f"Réponse OpenAI non valide: {e}")
             logger.error(f"Contenu reçu: {response.choices[0].message.content}")
@@ -90,7 +99,6 @@ Analyse les positions dans le contexte fourni et retourne les positions exactes 
     except Exception as e:
         logger.error(f"Erreur analyse OpenAI: {str(e)}")
         return None
-
 def process_drm_with_ai(buffer, positions):
     processed = bytearray(buffer)
     modifications_log = []
